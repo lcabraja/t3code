@@ -30,6 +30,17 @@ import {
   createRouter,
 } from "@tanstack/react-router";
 
+const { toastAddSpy } = vi.hoisted(() => ({
+  toastAddSpy: vi.fn(),
+}));
+
+vi.mock("../ui/toast", () => ({
+  stackedThreadToast: (input: unknown) => input,
+  toastManager: {
+    add: toastAddSpy,
+  },
+}));
+
 import { __resetLocalApiForTests } from "../../localApi";
 import { AppAtomRegistryProvider, resetAppAtomRegistryForTests } from "../../rpc/atomRegistry";
 import { resetServerStateForTests, setServerConfigSnapshot } from "../../rpc/serverState";
@@ -450,6 +461,21 @@ const createDesktopBridgeStub = (overrides?: {
   };
 };
 
+function setDesktopBridgeMock(wsUrl: string) {
+  Object.defineProperty(window, "desktopBridge", {
+    configurable: true,
+    value: {
+      getLocalEnvironmentBootstrap: () => ({
+        label: "Local environment",
+        httpBaseUrl: "http://127.0.0.1:4123/",
+        wsBaseUrl: wsUrl,
+        bootstrapToken: "bootstrap-token",
+      }),
+      setTheme: vi.fn().mockResolvedValue(undefined),
+    } as Partial<DesktopBridge>,
+  });
+}
+
 describe("GeneralSettingsPanel observability", () => {
   let mounted:
     | (Awaited<ReturnType<typeof render>> & {
@@ -465,6 +491,15 @@ describe("GeneralSettingsPanel observability", () => {
     useUiStateStore.setState({ defaultAdvertisedEndpointKey: null });
     authAccessHarness.reset();
     mockConnectDesktopSshEnvironment.mockReset();
+    toastAddSpy.mockReset();
+    Object.defineProperty(globalThis, "navigator", {
+      configurable: true,
+      value: {
+        clipboard: {
+          writeText: vi.fn().mockResolvedValue(undefined),
+        },
+      },
+    });
   });
 
   afterEach(async () => {
@@ -741,6 +776,141 @@ describe("GeneralSettingsPanel observability", () => {
         ),
       )
       .toBeInTheDocument();
+  });
+
+  it("shows the runtime websocket endpoint in web mode and copies it", async () => {
+    setServerConfigSnapshot(createBaseServerConfig());
+    const writeTextSpy = vi.mocked(navigator.clipboard.writeText);
+    const expectedUrl = new URL("/ws", window.location.origin);
+    expectedUrl.protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+
+    mounted = await renderWithTestRouter(
+      <AppAtomRegistryProvider>
+        <GeneralSettingsPanel />
+      </AppAtomRegistryProvider>,
+    );
+
+    await expect.element(page.getByText("WebSocket endpoint")).toBeInTheDocument();
+    await expect
+      .element(page.getByText(expectedUrl.toString(), { exact: true }))
+      .toBeInTheDocument();
+
+    await page.getByRole("button", { name: "Copy URL" }).click();
+
+    expect(writeTextSpy).toHaveBeenCalledWith(expectedUrl.toString());
+    await expect.element(page.getByRole("button", { name: "Copied!" })).toBeInTheDocument();
+  });
+
+  it("masks tokenized desktop websocket endpoints by default", async () => {
+    setDesktopBridgeMock("ws://127.0.0.1:4123/?token=secret-token");
+    setServerConfigSnapshot(createBaseServerConfig());
+
+    mounted = await renderWithTestRouter(
+      <AppAtomRegistryProvider>
+        <GeneralSettingsPanel />
+      </AppAtomRegistryProvider>,
+    );
+
+    await expect
+      .element(
+        page.getByText("ws://127.0.0.1:4123/ws?token=••••••", {
+          exact: true,
+        }),
+      )
+      .toBeInTheDocument();
+    await expect.element(page.getByRole("button", { name: "Show URL" })).toBeInTheDocument();
+  });
+
+  it("reveals and re-masks the tokenized desktop websocket endpoint", async () => {
+    setDesktopBridgeMock("ws://127.0.0.1:4123/?token=secret-token");
+    setServerConfigSnapshot(createBaseServerConfig());
+
+    mounted = await renderWithTestRouter(
+      <AppAtomRegistryProvider>
+        <GeneralSettingsPanel />
+      </AppAtomRegistryProvider>,
+    );
+
+    await page.getByRole("button", { name: "Show URL" }).click();
+    await expect
+      .element(
+        page.getByText("ws://127.0.0.1:4123/ws?token=secret-token", {
+          exact: true,
+        }),
+      )
+      .toBeInTheDocument();
+    await expect.element(page.getByRole("button", { name: "Hide URL" })).toBeInTheDocument();
+
+    await page.getByRole("button", { name: "Hide URL" }).click();
+    await expect
+      .element(
+        page.getByText("ws://127.0.0.1:4123/ws?token=••••••", {
+          exact: true,
+        }),
+      )
+      .toBeInTheDocument();
+  });
+
+  it("copies the full tokenized endpoint while still hidden", async () => {
+    const writeTextSpy = vi.mocked(navigator.clipboard.writeText);
+    setDesktopBridgeMock("ws://127.0.0.1:4123/?token=secret-token");
+    setServerConfigSnapshot(createBaseServerConfig());
+
+    mounted = await renderWithTestRouter(
+      <AppAtomRegistryProvider>
+        <GeneralSettingsPanel />
+      </AppAtomRegistryProvider>,
+    );
+
+    await page.getByRole("button", { name: "Copy URL" }).click();
+
+    expect(writeTextSpy).toHaveBeenCalledWith("ws://127.0.0.1:4123/ws?token=secret-token");
+    await expect.element(page.getByRole("button", { name: "Copied!" })).toBeInTheDocument();
+  });
+
+  it("shows a generic toast when copying the websocket endpoint fails", async () => {
+    Object.defineProperty(globalThis, "navigator", {
+      configurable: true,
+      value: {
+        clipboard: {
+          writeText: vi.fn().mockRejectedValue(new Error("clipboard denied")),
+        },
+      },
+    });
+    setDesktopBridgeMock("ws://127.0.0.1:4123/?token=secret-token");
+    setServerConfigSnapshot(createBaseServerConfig());
+
+    mounted = await renderWithTestRouter(
+      <AppAtomRegistryProvider>
+        <GeneralSettingsPanel />
+      </AppAtomRegistryProvider>,
+    );
+
+    await page.getByRole("button", { name: "Copy URL" }).click();
+
+    expect(toastAddSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "error",
+        title: "Failed to copy WebSocket URL",
+      }),
+    );
+    expect(JSON.stringify(toastAddSpy.mock.calls)).not.toContain("secret-token");
+    expect(JSON.stringify(toastAddSpy.mock.calls)).not.toContain("ws://127.0.0.1:4123");
+  });
+
+  it("renders disabled websocket endpoint controls when resolution fails", async () => {
+    setDesktopBridgeMock("://bad-url");
+    setServerConfigSnapshot(createBaseServerConfig());
+
+    mounted = await renderWithTestRouter(
+      <AppAtomRegistryProvider>
+        <GeneralSettingsPanel />
+      </AppAtomRegistryProvider>,
+    );
+
+    await expect.element(page.getByText("Endpoint unavailable.")).toBeInTheDocument();
+    await expect.element(page.getByRole("button", { name: "Show URL" })).toBeDisabled();
+    await expect.element(page.getByRole("button", { name: "Copy URL" })).toBeDisabled();
   });
 
   it("creates and shows a pairing link when network access is enabled", async () => {

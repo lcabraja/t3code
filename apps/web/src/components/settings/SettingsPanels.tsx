@@ -28,6 +28,7 @@ import { ProviderModelPicker } from "../chat/ProviderModelPicker";
 import { TraitsPicker } from "../chat/TraitsPicker";
 import { isElectron } from "../../env";
 import { buildHostedChannelSelectionUrl, type HostedAppChannel } from "../../hostedPairing";
+import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
 import { useTheme } from "../../hooks/useTheme";
 import { useSettings, useUpdateSettings } from "../../hooks/useSettings";
 import { useThreadActions } from "../../hooks/useThreadActions";
@@ -48,6 +49,11 @@ import { useShallow } from "zustand/react/shallow";
 import { selectProjectsAcrossEnvironments, useStore } from "../../store";
 import { useArchivedThreadSnapshots } from "../../lib/archivedThreadsState";
 import { formatRelativeTime, formatRelativeTimeLabel } from "../../timestampFormat";
+import {
+  hasSensitiveWsToken,
+  redactWsEndpointUrl,
+  resolveRuntimeWsEndpointUrl,
+} from "../../lib/utils";
 import { Button } from "../ui/button";
 import { DraftInput } from "../ui/draft-input";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
@@ -483,6 +489,7 @@ export function GeneralSettingsPanel() {
   const { updateSettings } = useUpdateSettings();
   const observability = useServerObservability();
   const serverProviders = useServerProviders();
+  const [isWsUrlVisible, setIsWsUrlVisible] = useState(false);
   const diagnosticsDescription = formatDiagnosticsDescription({
     localTracingEnabled: observability?.localTracingEnabled ?? false,
     otlpTracesEnabled: observability?.otlpTracesEnabled ?? false,
@@ -490,6 +497,27 @@ export function GeneralSettingsPanel() {
     otlpMetricsEnabled: observability?.otlpMetricsEnabled ?? false,
     otlpMetricsUrl: observability?.otlpMetricsUrl,
   });
+  const wsEndpointUrl = resolveRuntimeWsEndpointUrl();
+  const wsEndpointHasToken = wsEndpointUrl ? hasSensitiveWsToken(wsEndpointUrl) : false;
+  const wsEndpointDisplayValue = wsEndpointUrl
+    ? wsEndpointHasToken && !isWsUrlVisible
+      ? redactWsEndpointUrl(wsEndpointUrl)
+      : wsEndpointUrl
+    : "Endpoint unavailable.";
+  const { copyToClipboard: copyWsUrlToClipboard, isCopied: isWsUrlCopied } = useCopyToClipboard({
+    onError: () => {
+      toastManager.add({
+        type: "error",
+        title: "Failed to copy WebSocket URL",
+        description: "Clipboard access is unavailable.",
+      });
+    },
+  });
+
+  const handleCopyWsUrl = useCallback(() => {
+    if (!wsEndpointUrl) return;
+    copyWsUrlToClipboard(wsEndpointUrl, undefined);
+  }, [copyWsUrlToClipboard, wsEndpointUrl]);
 
   const textGenerationModelSelection = resolveAppModelSelectionState(settings, serverProviders);
   const textGenInstanceId = textGenerationModelSelection.instanceId;
@@ -907,6 +935,37 @@ export function GeneralSettingsPanel() {
             <Button render={<Link to="/settings/diagnostics" />} size="xs" variant="outline">
               View diagnostics
             </Button>
+          }
+        />
+        <SettingsRow
+          title="WebSocket endpoint"
+          description="Use this exact endpoint from external WS/RPC tooling."
+          status={
+            <span className="block break-all font-mono text-[11px] text-foreground">
+              {wsEndpointDisplayValue}
+            </span>
+          }
+          control={
+            <>
+              {wsEndpointHasToken || !wsEndpointUrl ? (
+                <Button
+                  size="xs"
+                  variant="outline"
+                  disabled={!wsEndpointUrl}
+                  onClick={() => setIsWsUrlVisible((current) => !current)}
+                >
+                  {isWsUrlVisible ? "Hide URL" : "Show URL"}
+                </Button>
+              ) : null}
+              <Button
+                size="xs"
+                variant="outline"
+                disabled={!wsEndpointUrl}
+                onClick={handleCopyWsUrl}
+              >
+                {isWsUrlCopied ? "Copied!" : "Copy URL"}
+              </Button>
+            </>
           }
         />
       </SettingsSection>

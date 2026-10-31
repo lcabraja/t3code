@@ -86,6 +86,14 @@ import * as PreviewBrowserHost from "./PreviewBrowserHost.ts";
 import { presentAsChrome, ServerBrowserContexts } from "./ServerBrowserContexts.ts";
 import { BrowserControlInterrupted, SessionControl } from "./SessionControl.ts";
 import { installPdfDocumentNavigation, isPdfAssetUrl } from "./PdfDocumentNavigation.ts";
+import {
+  answerPasskey,
+  type AutofillReport,
+  type CredentialPrompt,
+  fillLogin,
+  installAutofill,
+  parseAutofillReport,
+} from "./ServerBrowserAutofill.ts";
 
 const SERVER_HOST_CLIENT_ID = SERVER_BROWSER_AUTOMATION_CLIENT_ID;
 const RENDER_SCALE = 2;
@@ -195,6 +203,7 @@ export type ServerBrowserViewerOutput =
       readonly accept: string;
     }
   | { readonly _tag: "fileChooserClosed"; readonly id: string }
+  | { readonly _tag: "credential"; readonly prompt: CredentialPrompt | null }
   | { readonly _tag: "popup"; readonly tabId: string }
   | {
       readonly _tag: "download";
@@ -310,6 +319,12 @@ interface ServerTab {
     readonly offeredTo: string | null;
   } | null;
   dialog: Dialog | null;
+  readonly autofill: {
+    form: PendingCredential | null;
+    passkey: (PendingCredential & { readonly requestId: string }) | null;
+    /** A dismissed form stays quiet until the user focuses one of its fields. */
+    dismissedDoc: string | null;
+  };
   setting: PreviewViewportSetting;
   colorScheme: PreviewAppearancePreference;
   zoomFactor: number;
@@ -333,6 +348,13 @@ interface ServerTab {
   recordingStart: Promise<Recording> | null;
   captureLock: Promise<void>;
   capturing: number;
+}
+
+interface PendingCredential {
+  readonly prompt: CredentialPrompt;
+  readonly session: CDPSession;
+  readonly contextId: number;
+  readonly doc: string;
 }
 
 interface ServerDownload {
@@ -809,6 +831,7 @@ const make = Effect.gen(function* () {
     // went out before it became a tab; everything after presents as Chrome.
     if (!desktop) await presentAsChrome(cdp, host);
     if (!desktop) await recordCopies(cdp);
+    if (!desktop) await installAutofill(cdp);
     page.setDefaultTimeout(NAVIGATION_TIMEOUT_MS);
     page.setDefaultNavigationTimeout(NAVIGATION_TIMEOUT_MS);
     const control = new SessionControl(snapshot.automationOwner ?? null, () =>
@@ -842,6 +865,7 @@ const make = Effect.gen(function* () {
       downloads: [],
       fileChooser: null,
       dialog: null,
+      autofill: { form: null, passkey: null, dismissedDoc: null },
       setting: snapshot.viewport ?? FILL_PREVIEW_VIEWPORT,
       colorScheme: "system",
       zoomFactor: 1,
@@ -969,6 +993,7 @@ const make = Effect.gen(function* () {
       broadcastControl(tab);
     });
     page.on("download", (download) => void saveDownload(tab, download));
+    if (!desktop) watchAutofill(tab, cdp);
     updateFileChooserInterception(tab);
     // Popups become tabs and keep `window.opener`, so sign-in popups can report back.
     page.on("popup", (popup) => void adoptPopup(tab, popup));
@@ -1259,6 +1284,138 @@ const make = Effect.gen(function* () {
       if (!frame.isDetached()) void recordFrameCopies(tab, frame);
     });
     await recordCopies(cdp).catch(constVoid);
+    await installAutofill(cdp).catch(constVoid);
+    watchAutofill(tab, cdp);
+  };
+
+  const credentialPrompt = (tab: ServerTab) =>
+    tab.autofill.passkey?.prompt ?? tab.autofill.form?.prompt ?? null;
+
+  const pushCredential = (tab: ServerTab) => {
+    const prompt = credentialPrompt(tab);
+    for (const viewer of tab.viewers) viewer.push({ _tag: "credential", prompt });
+  };
+
+  const onAutofillReport = (
+    tab: ServerTab,
+    session: CDPSession,
+    contextId: number,
+    report: AutofillReport,
+  ) => {
+    const { autofill } = tab;
+    let topOrigin: string | null = null;
+    try {
+      topOrigin = new URL(tab.page.url()).origin;
+    } catch {}
+    const framedIn = (origin: string) =>
+      topOrigin !== null && topOrigin !== origin ? topOrigin : null;
+    switch (report.type) {
+      case "form": {
+        if (report.focused) autofill.dismissedDoc = null;
+        else if (autofill.dismissedDoc === report.doc) return;
+        const previous = autofill.form;
+        autofill.form = {
+          session,
+          contextId,
+          doc: report.doc,
+          prompt: {
+            id:
+              previous?.doc === report.doc && previous.session === session
+                ? previous.prompt.id
+                : NodeCrypto.randomUUID(),
+            kind: "password",
+            origin: report.origin,
+            topOrigin: framedIn(report.origin),
+            username: report.username,
+            password: report.password,
+            signup: report.signup,
+          },
+        };
+        break;
+      }
+      case "formGone":
+        if (autofill.form?.doc !== report.doc) return;
+        autofill.form = null;
+        break;
+      case "passkey": {
+        // Nobody can answer an unwatched tab, such as an agent's, so the browser handles it.
+        if (tab.viewers.size === 0) {
+          void answerPasskey(session, contextId, report.id, true);
+          return;
+        }
+        const previous = autofill.passkey;
+        if (previous)
+          void answerPasskey(previous.session, previous.contextId, previous.requestId, false);
+        autofill.passkey = {
+          session,
+          contextId,
+          doc: report.doc,
+          requestId: report.id,
+          prompt: {
+            id: NodeCrypto.randomUUID(),
+            kind: "passkey",
+            origin: report.origin,
+            topOrigin: framedIn(report.origin),
+            action: report.action,
+            rpId: report.rpId,
+            userName: report.userName,
+          },
+        };
+        break;
+      }
+      case "passkeyGone":
+        if (autofill.passkey?.requestId !== report.id) return;
+        autofill.passkey = null;
+        break;
+    }
+    pushCredential(tab);
+  };
+
+  const watchAutofill = (tab: ServerTab, session: CDPSession) => {
+    session.on("Runtime.bindingCalled", (event) => {
+      const report = parseAutofillReport(event);
+      if (report) onAutofillReport(tab, session, event.executionContextId, report);
+    });
+    // A navigated document takes its form and any waiting passkey request with it.
+    const forget = (lost: (pending: PendingCredential) => boolean) => {
+      const { form, passkey } = tab.autofill;
+      if (form?.session === session && lost(form)) tab.autofill.form = null;
+      if (passkey?.session === session && lost(passkey)) tab.autofill.passkey = null;
+      if (form !== tab.autofill.form || passkey !== tab.autofill.passkey) pushCredential(tab);
+    };
+    session.on("Runtime.executionContextDestroyed", ({ executionContextId }) =>
+      forget((pending) => pending.contextId === executionContextId),
+    );
+    session.on("Runtime.executionContextsCleared", () => forget(() => true));
+  };
+
+  const answerCredential = async (tab: ServerTab, message: Record<string, unknown>) => {
+    const { form, passkey } = tab.autofill;
+    if (passkey && passkey.prompt.id === message.promptId) {
+      tab.autofill.passkey = null;
+      pushCredential(tab);
+      await answerPasskey(
+        passkey.session,
+        passkey.contextId,
+        passkey.requestId,
+        message.action === "allow",
+      );
+      return;
+    }
+    if (!form || form.prompt.id !== message.promptId) return;
+    tab.autofill.form = null;
+    if (message.action !== "fill") tab.autofill.dismissedDoc = form.doc;
+    pushCredential(tab);
+    if (message.action !== "fill") return;
+    const value = (field: unknown) =>
+      typeof field === "string" && field.length > 0 ? field.slice(0, 4096) : undefined;
+    const username = value(message.username);
+    const password = value(message.password);
+    await fillLogin(form.session, form.contextId, {
+      ...(username === undefined ? {} : { username }),
+      ...(password === undefined ? {} : { password }),
+      submit: message.submit === true,
+    });
   };
 
   const takeSessionCopies = async (cdp: CDPSession) => {
@@ -2490,17 +2647,25 @@ const make = Effect.gen(function* () {
         if (next._tag === "frame") runFork(next.ack);
         // State a stalled viewer cannot miss compacts its backlog. It runs
         // synchronously so an older compaction can never land after a newer one.
-        else if (["gone", "reconnect", "control", "viewport", "fileChooser"].includes(next._tag)) {
+        else if (
+          ["gone", "reconnect", "control", "viewport", "fileChooser", "credential"].includes(
+            next._tag,
+          )
+        ) {
           const dropped = Effect.runSyncExit(Queue.clear(output));
           if (dropped._tag === "Failure") return;
           const items = [...dropped.value, next];
           // Without its latest size and control the viewer cannot map input at all.
-          const state = (["control", "viewport"] as const).flatMap(
+          const state = (["control", "viewport", "credential"] as const).flatMap(
             (tag) => items.findLast((item) => item._tag === tag) ?? [],
           );
           // Everything else is one-time; if it no longer fits, the oldest goes first.
           const rest = items.filter(
-            (item) => item._tag !== "frame" && item._tag !== "control" && item._tag !== "viewport",
+            (item) =>
+              item._tag !== "frame" &&
+              item._tag !== "control" &&
+              item._tag !== "viewport" &&
+              item._tag !== "credential",
           );
           for (const item of [...rest.slice(state.length - VIEWER_OUTPUT_LIMIT), ...state])
             Queue.offerUnsafe(output, item);
@@ -2535,6 +2700,7 @@ const make = Effect.gen(function* () {
     }
     broadcastControl(tab);
     pushFileChooser(tab);
+    viewer.push({ _tag: "credential", prompt: credentialPrompt(tab) });
     const pushStill = async () => {
       const data = await withCaptureLock(tab, () =>
         ServerBrowserPage.captureViewport(session, { format: "jpeg", quality }),
@@ -2627,6 +2793,8 @@ const make = Effect.gen(function* () {
                   ? { promptText: message.promptText }
                   : {}),
               });
+            } else if (message.type === "credential") {
+              await tab.control.human(viewer.id, () => answerCredential(tab, message));
             } else {
               const dispatch = () => dispatchViewerInput(tab, session, viewer, message);
               if (

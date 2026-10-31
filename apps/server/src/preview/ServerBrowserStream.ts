@@ -160,6 +160,7 @@ const makeHandler = Effect.fnUntraced(function* (browser: ServerBrowser.ServerBr
             case "download":
             case "fileChooser":
             case "fileChooserClosed":
+            case "credential":
             case "popup":
             case "pointer":
             case "probe": {

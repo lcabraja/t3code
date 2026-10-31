@@ -5,6 +5,7 @@ import {
   previewStreamModifiers,
   type PreviewStreamClient,
   type PreviewStreamControl,
+  type PreviewStreamCredentialPrompt,
   type PreviewStreamDownload,
   type PreviewStreamFileChooser,
   uploadPreviewStreamFiles,
@@ -34,6 +35,7 @@ import {
 
 import { AgentCursorMark } from "~/components/preview/AgentBrowserCursor";
 import { CommandBlock } from "~/components/CommandBlock";
+import { CredentialPromptCard } from "./CredentialPromptCard";
 import { Button } from "~/components/ui/button";
 import { Input } from "~/components/ui/input";
 import { toastManager } from "~/components/ui/toast";
@@ -176,6 +178,9 @@ export function ServerBrowserSurface(props: {
   const [control, setControl] = useState<PreviewStreamControl | null>(null);
   const [promptText, setPromptText] = useState("");
   const [fileChooser, setFileChooser] = useState<PreviewStreamFileChooser | null>(null);
+  const [credentialPrompt, setCredentialPrompt] = useState<PreviewStreamCredentialPrompt | null>(
+    null,
+  );
   const [agentCursor, setAgentCursor] = useState<AgentCursorPlacement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const answerFileChooser = (files: ReadonlyArray<File>) => {
@@ -396,6 +401,7 @@ export function ServerBrowserSurface(props: {
         onDownload: offerDownload,
         onPopup: popupOpened,
         onFileChooser: setFileChooser,
+        onCredential: setCredentialPrompt,
         onViewport: (viewport) => {
           viewportRef.current = viewport;
           viewportChanged(viewport);
@@ -420,6 +426,7 @@ export function ServerBrowserSurface(props: {
         onConnectedChange: (connected) => {
           if (connected) return;
           setFileChooser(null);
+          setCredentialPrompt(null);
           controlRef.current = null;
           setControl(null);
           controlChanged(null);
@@ -829,6 +836,14 @@ export function ServerBrowserSurface(props: {
               </Button>
             </div>
           </div>
+        ) : null}
+        {credentialPrompt && !control?.dialog && !fileChooser ? (
+          <CredentialPromptCard
+            key={credentialPrompt.id}
+            prompt={credentialPrompt}
+            canAnswer={control?.controller === "you"}
+            send={send}
+          />
         ) : null}
         {control?.dialog ? (
           <div

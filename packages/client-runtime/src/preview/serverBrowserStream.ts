@@ -49,6 +49,54 @@ const isPreviewStreamDialog = (value: unknown): value is PreviewStreamControl["d
     "defaultValue" in value &&
     typeof value.defaultValue === "string");
 
+/** The page wants a login or a passkey. Nothing is saved; the viewer answers each time. */
+export type PreviewStreamCredentialPrompt =
+  | {
+      readonly id: string;
+      readonly kind: "password";
+      readonly origin: string;
+      /** Set when a frame from another site asks. */
+      readonly topOrigin: string | null;
+      readonly username: boolean;
+      readonly password: boolean;
+      readonly signup: boolean;
+    }
+  | {
+      readonly id: string;
+      readonly kind: "passkey";
+      readonly origin: string;
+      readonly topOrigin: string | null;
+      readonly action: "get" | "create";
+      readonly rpId: string | null;
+      readonly userName: string | null;
+    };
+
+const nullableString = (value: unknown): value is string | null =>
+  value === null || typeof value === "string";
+
+const parseCredentialPrompt = (
+  value: unknown,
+): PreviewStreamCredentialPrompt | null | undefined => {
+  if (value === null) return null;
+  if (typeof value !== "object") return undefined;
+  const prompt = value as Record<string, unknown>;
+  const { id, kind, origin, topOrigin } = prompt;
+  if (typeof id !== "string" || typeof origin !== "string" || !nullableString(topOrigin))
+    return undefined;
+  if (kind === "password") {
+    const { username, password, signup } = prompt;
+    if (typeof username !== "boolean" || typeof password !== "boolean") return undefined;
+    return { id, kind, origin, topOrigin, username, password, signup: signup === true };
+  }
+  if (kind === "passkey") {
+    const { action, rpId, userName } = prompt;
+    if ((action !== "get" && action !== "create") || !nullableString(rpId)) return undefined;
+    if (!nullableString(userName)) return undefined;
+    return { id, kind, origin, topOrigin, action, rpId, userName };
+  }
+  return undefined;
+};
+
 /** Coordinates are page CSS px. */
 export type PreviewStreamInput =
   | { readonly type: "takeControl" }
@@ -90,7 +138,16 @@ export type PreviewStreamInput =
   | { readonly type: "navigate"; readonly url: string }
   | { readonly type: "history"; readonly delta: -1 | 1 }
   | { readonly type: "reload"; readonly ignoreCache?: boolean }
-  | { readonly type: "probe"; readonly x: number; readonly y: number };
+  | { readonly type: "probe"; readonly x: number; readonly y: number }
+  | {
+      readonly type: "credential";
+      readonly promptId: string;
+      /** `fill` and `dismiss` answer a login form; `allow` and `deny` answer a passkey request. */
+      readonly action: "fill" | "dismiss" | "allow" | "deny";
+      readonly username?: string;
+      readonly password?: string;
+      readonly submit?: boolean;
+    };
 
 export interface PreviewStreamDownload {
   readonly fileName: string;
@@ -192,6 +249,7 @@ export interface PreviewStreamEvents {
   readonly onDownload?: (download: PreviewStreamDownload) => void;
   readonly onPopup?: (tabId: string) => void;
   readonly onFileChooser?: (chooser: PreviewStreamFileChooser | null) => void;
+  readonly onCredential?: (prompt: PreviewStreamCredentialPrompt | null) => void;
   readonly onConnectedChange: (connected: boolean) => void;
   /** The upgrade was refused; refresh access and start a new client. */
   readonly onUnauthorized: () => void;
@@ -271,8 +329,12 @@ export function createPreviewStreamClient(
         phase,
         sequence,
         tabId,
+        prompt,
       } = message as Record<string, unknown>;
-      if (
+      if (type === "credential") {
+        const credential = parseCredentialPrompt(prompt);
+        if (credential !== undefined) events.onCredential?.(credential);
+      } else if (
         type === "fileChooser" &&
         typeof id === "string" &&
         typeof multiple === "boolean" &&

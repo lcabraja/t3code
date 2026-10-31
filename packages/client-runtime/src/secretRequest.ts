@@ -6,10 +6,39 @@ export type SecretRequestItem = Extract<
 >;
 
 /** A `file` request lets the agent's commands read the value, so its card must not promise more. */
-export const secretRequestPrivacyNote = (item: Pick<SecretRequestItem, "delivery">) =>
-  item.delivery === "file"
-    ? "Kept out of chat, in a private file this agent's commands can read for 24 hours"
-    : "Stored securely, never shown to the agent";
+export const secretRequestPrivacyNote = (item: Pick<SecretRequestItem, "delivery" | "login">) =>
+  item.login
+    ? `Typed into ${loginRequestUrl(item.login.url).host} only, never stored or shown to the agent`
+    : item.delivery === "file"
+      ? "Kept out of chat, in a private file this agent's commands can read for 24 hours"
+      : "Stored securely, never shown to the agent";
+
+const MAX_QUERY_VALUE = 24;
+
+/** Long query values are cut so the host and path stay readable; the full URL goes in a tooltip. */
+export function loginRequestUrl(url: string): {
+  readonly host: string;
+  readonly path: string;
+  readonly secure: boolean;
+} {
+  try {
+    const parsed = new URL(url);
+    const query = [...parsed.searchParams]
+      .map(([key, value]) =>
+        value.length > MAX_QUERY_VALUE
+          ? `${key}=${value.slice(0, MAX_QUERY_VALUE)}…`
+          : `${key}=${value}`,
+      )
+      .join("&");
+    return {
+      host: parsed.host,
+      path: `${parsed.pathname}${query ? `?${query}` : ""}`,
+      secure: parsed.protocol === "https:",
+    };
+  } catch {
+    return { host: url, path: "", secure: false };
+  }
+}
 export const SECRET_REQUEST_DEFAULT_PLACEHOLDER = "Paste the secret";
 
 export type SecretRequestDisplay =
@@ -25,6 +54,11 @@ const SAVED_DISPLAY: SecretRequestDisplay = {
   kind: "answered",
   outcome: "saved",
   label: "Saved securely and kept private",
+};
+const LOGIN_SENT_DISPLAY: SecretRequestDisplay = {
+  kind: "answered",
+  outcome: "saved",
+  label: "Sent to the page",
 };
 const DECLINED_DISPLAY: SecretRequestDisplay = {
   kind: "answered",
@@ -47,14 +81,14 @@ const PENDING_ELSEWHERE_DISPLAY: SecretRequestDisplay = {
  * thread (a fork) can only be answered where it was asked.
  */
 export function secretRequestDisplay(
-  item: Pick<SecretRequestItem, "secretStatus">,
+  item: Pick<SecretRequestItem, "secretStatus" | "login">,
   visibility: "local" | "inherited" | "synthetic",
 ): SecretRequestDisplay {
   switch (item.secretStatus) {
     case "pending":
       return visibility === "local" ? PENDING_DISPLAY : PENDING_ELSEWHERE_DISPLAY;
     case "saved":
-      return SAVED_DISPLAY;
+      return item.login ? LOGIN_SENT_DISPLAY : SAVED_DISPLAY;
     case "declined":
       return DECLINED_DISPLAY;
     case "cancelled":
@@ -64,10 +98,22 @@ export function secretRequestDisplay(
 
 export function secretRequestAnswerInput(
   item: Pick<SecretRequestItem, "id" | "threadId">,
-  answer: { readonly type: "save"; readonly secret: string } | { readonly type: "decline" },
+  answer:
+    | { readonly type: "save"; readonly secret: string }
+    | { readonly type: "login"; readonly username: string; readonly password: string }
+    | { readonly type: "decline" },
 ): SecretRequestAnswerInput | null {
   if (answer.type === "decline") {
     return { threadId: item.threadId, turnItemId: item.id, answer: { type: "decline" } };
+  }
+  if (answer.type === "login") {
+    if (answer.password.length === 0) return null;
+    const username = answer.username.trim();
+    return {
+      threadId: item.threadId,
+      turnItemId: item.id,
+      answer: { type: "login", ...(username ? { username } : {}), password: answer.password },
+    };
   }
   const secret = answer.secret.trim();
   if (secret.length === 0) return null;

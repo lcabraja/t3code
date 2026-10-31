@@ -1512,12 +1512,20 @@ export type OrchestrationV2SecretRequestStatus = typeof OrchestrationV2SecretReq
 /** `file`: the value goes to an owner-only file the agent's shell commands can read. */
 export const OrchestrationV2SecretRequestDelivery = Schema.Literal("file");
 
+/** A login bound by the server to one browser tab; the agent cannot change where it goes. */
+export const OrchestrationV2SecretRequestLogin = Schema.Struct({
+  tabId: Schema.String,
+  url: Schema.String,
+});
+export type OrchestrationV2SecretRequestLogin = typeof OrchestrationV2SecretRequestLogin.Type;
+
 const OrchestrationV2SecretRequestFields = {
   type: Schema.Literal("secret_request"),
   label: TrimmedNonEmptyString,
   reason: Schema.String,
   placeholder: Schema.optional(Schema.String),
   delivery: Schema.optional(OrchestrationV2SecretRequestDelivery),
+  login: Schema.optional(OrchestrationV2SecretRequestLogin),
   secretStatus: OrchestrationV2SecretRequestStatus,
 } as const;
 
@@ -3482,6 +3490,7 @@ const OrchestrationV2InternalCommand = Schema.Union([
     reason: Schema.String,
     placeholder: Schema.optional(Schema.String),
     delivery: Schema.optional(OrchestrationV2SecretRequestDelivery),
+    login: Schema.optional(OrchestrationV2SecretRequestLogin),
     secretStatus: OrchestrationV2SecretRequestStatus,
   }),
   /**

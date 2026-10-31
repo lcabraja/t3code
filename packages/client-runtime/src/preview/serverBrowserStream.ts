@@ -60,6 +60,8 @@ export type PreviewStreamCredentialPrompt =
       readonly username: boolean;
       readonly password: boolean;
       readonly signup: boolean;
+      /** Dismissed for this page; the viewer can bring it back. */
+      readonly dismissed: boolean;
     }
   | {
       readonly id: string;
@@ -86,7 +88,8 @@ const parseCredentialPrompt = (
   if (kind === "password") {
     const { username, password, signup } = prompt;
     if (typeof username !== "boolean" || typeof password !== "boolean") return undefined;
-    return { id, kind, origin, topOrigin, username, password, signup: signup === true };
+    const dismissed = prompt.dismissed === true;
+    return { id, kind, origin, topOrigin, username, password, signup: signup === true, dismissed };
   }
   if (kind === "passkey") {
     const { action, rpId, userName } = prompt;
@@ -142,8 +145,8 @@ export type PreviewStreamInput =
   | {
       readonly type: "credential";
       readonly promptId: string;
-      /** `fill` and `dismiss` answer a login form; `allow` and `deny` answer a passkey request. */
-      readonly action: "fill" | "dismiss" | "allow" | "deny";
+      /** `fill`, `dismiss` and `reopen` act on a login form; `allow` and `deny` answer a passkey request. */
+      readonly action: "fill" | "dismiss" | "reopen" | "allow" | "deny";
       readonly username?: string;
       readonly password?: string;
       readonly submit?: boolean;

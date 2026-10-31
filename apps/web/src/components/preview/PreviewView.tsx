@@ -188,6 +188,10 @@ export function PreviewView({
   const isServerTab = snapshot?.runtime === "server" && !nativeServerTab;
   const serverOwnsRendering = snapshot?.runtime === "server";
   const serverSurfaceRef = useRef<ServerBrowserHandle | null>(null);
+  const [loginPrompt, setLoginPrompt] = useState<{
+    readonly tabId: string;
+    readonly state: "shown" | "hidden";
+  } | null>(null);
   const [serverAspectRatioLocked, setServerAspectRatioLocked] = useState(false);
   const [serverToolbarWidth, setServerToolbarWidth] = useState(0);
   const serverToolbarShown =
@@ -888,6 +892,10 @@ export function PreviewView({
           tabId && (isServerTab || previewBridge) ? handlePictureInPicture : undefined
         }
         pictureInPicture={miniPlayerTabId === tabId}
+        loginPrompt={
+          isServerTab && loginPrompt?.tabId === runtimeTabId ? loginPrompt.state : undefined
+        }
+        onToggleLoginPrompt={() => serverSurfaceRef.current?.toggleLoginPrompt()}
         pictureInPictureDisabled={
           isUnreachable || (!isServerTab && !desktopOverlay?.hasWebContents)
         }
@@ -975,6 +983,9 @@ export function PreviewView({
                   setServerControlledTabId(control?.controller === "you" ? runtimeTabId : null)
                 }
                 onPopup={(popupTabId) => showPreviewPopup(threadRef, popupTabId, "panel")}
+                onLoginPrompt={(state) =>
+                  setLoginPrompt(state && runtimeTabId ? { tabId: runtimeTabId, state } : null)
+                }
                 // Stays connected under the empty state so a URL picked there reaches the page.
                 className={cn(
                   "absolute inset-0 h-full w-full",

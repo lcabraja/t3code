@@ -1,6 +1,7 @@
 // Answers stay in the secret store behind one-use refs; orchestration records only request status.
 // Consuming tools keep values out of transcripts, projections, clients and model context.
 // A `file` request instead moves its value to an owner-only file for the agent's own shell.
+// A login request's answer stays in memory until the server fills it into the bound tab.
 import { pipe } from "effect/Function";
 import {
   CommandId,
@@ -49,6 +50,11 @@ const StoredSecret = Schema.fromJsonString(
 const encodeStored = Schema.encodeEffect(StoredSecret);
 const decodeStored = Schema.decodeUnknownOption(StoredSecret);
 
+export interface SavedLogin {
+  readonly username?: string;
+  readonly password: string;
+}
+
 export class SecretRequests extends Context.Service<
   SecretRequests,
   {
@@ -61,6 +67,11 @@ export class SecretRequests extends Context.Service<
       readonly ref: SecretRef;
       readonly projectId: ProjectId;
     }) => Effect.Effect<string, SecretRequestError>;
+    /** A saved login, removed as it is read; never written to disk. */
+    readonly takeLogin: (input: {
+      readonly threadId: ThreadId;
+      readonly turnItemId: string;
+    }) => Effect.Effect<Option.Option<SavedLogin>>;
     /** Moves a saved `file` request's value to an owner-only file and returns its path. */
     readonly saveToFile: (input: {
       readonly threadId: ThreadId;
@@ -76,6 +87,9 @@ const make = Effect.gen(function* () {
   const threadManagement = yield* ThreadManagementService.ThreadManagementService;
   // Beside the store's own files so the same owner-only directory and cleanup rules apply.
   const filesDir = store.directory === undefined ? undefined : path.join(store.directory, "files");
+
+  const logins = new Map<string, SavedLogin>();
+  const loginKey = (threadId: ThreadId, turnItemId: string) => `${threadId}\u0000${turnItemId}`;
 
   const salt = Buffer.from(
     yield* store.getOrCreateRandom("secret-request-salt", 32).pipe(Effect.orDie),
@@ -99,6 +113,12 @@ const make = Effect.gen(function* () {
       }
       if (item.secretStatus !== "pending") {
         return yield* new SecretRequestError({ reason: "already_answered" });
+      }
+      if (input.answer.type === "login" && item.login === undefined) {
+        return yield* new SecretRequestError({ reason: "not_a_login_request" });
+      }
+      if (input.answer.type === "save" && item.login !== undefined) {
+        return yield* new SecretRequestError({ reason: "login_required" });
       }
       const run = records.runs.find((candidate) => candidate.id === item.runId);
       if (run === undefined || ThreadManagementService.isTerminalRunStatus(run.status)) {
@@ -124,7 +144,14 @@ const make = Effect.gen(function* () {
             ),
           );
       }
-      const secretStatus = input.answer.type === "save" ? "saved" : "declined";
+      if (input.answer.type === "login") {
+        logins.set(loginKey(input.threadId, item.id), {
+          ...(input.answer.username ? { username: input.answer.username } : {}),
+          password: input.answer.password,
+        });
+      }
+      const forgetLogin = Effect.sync(() => logins.delete(loginKey(input.threadId, item.id)));
+      const secretStatus = input.answer.type === "decline" ? "declined" : "saved";
       yield* threadManagement
         .dispatch({
           type: "secret_request.record",
@@ -137,6 +164,7 @@ const make = Effect.gen(function* () {
           reason: item.reason,
           ...(item.placeholder === undefined ? {} : { placeholder: item.placeholder }),
           ...(item.delivery === undefined ? {} : { delivery: item.delivery }),
+          ...(item.login === undefined ? {} : { login: item.login }),
           secretStatus,
         })
         .pipe(
@@ -145,10 +173,10 @@ const make = Effect.gen(function* () {
           Effect.tapError(() =>
             input.answer.type === "save"
               ? pipe(refFor(salt, input.threadId, item.id), storeName, removeLogged)
-              : Effect.void,
+              : forgetLogin,
           ),
         );
-      if (input.answer.type !== "save") return;
+      if (input.answer.type === "decline") return;
       // The wait may have closed the card; delete unrecorded answers because no one receives their refs.
       const recorded = yield* threadManagement
         .getThreadRecords(input.threadId, ["turnItems"], {
@@ -160,6 +188,7 @@ const make = Effect.gen(function* () {
         );
       const card = recorded.turnItems.find((candidate) => candidate.id === item.id);
       if (card?.type === "secret_request" && card.secretStatus !== "saved") {
+        yield* forgetLogin;
         yield* pipe(refFor(salt, input.threadId, item.id), storeName, removeLogged);
         return yield* new SecretRequestError({ reason: "agent_stopped" });
       }
@@ -173,6 +202,14 @@ const make = Effect.gen(function* () {
       return Option.map(stored, () => ref);
     },
   );
+
+  const takeLogin: SecretRequests["Service"]["takeLogin"] = (input) =>
+    Effect.sync(() => {
+      const key = loginKey(input.threadId, input.turnItemId);
+      const saved = logins.get(key);
+      logins.delete(key);
+      return Option.fromNullishOr(saved);
+    });
 
   const removeLogged = (name: string) =>
     store.remove(name).pipe(
@@ -330,7 +367,7 @@ const make = Effect.gen(function* () {
     Effect.forkScoped,
   );
 
-  return SecretRequests.of({ answer, savedRef, consume, saveToFile });
+  return SecretRequests.of({ answer, savedRef, takeLogin, consume, saveToFile });
 });
 
 export const layer = Layer.effect(SecretRequests, make);

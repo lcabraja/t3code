@@ -36,6 +36,7 @@ const withService = <A, E>(
   options: {
     readonly threadId?: ThreadId;
     readonly delivery?: "file";
+    readonly login?: { readonly tabId: string; readonly url: string };
     readonly directory?: string;
     readonly runStatus?: string;
     readonly removeFails?: boolean;
@@ -107,6 +108,7 @@ const withService = <A, E>(
                 label: "GitHub token",
                 reason: "Used as GH_TOKEN.",
                 ...(options.delivery === undefined ? {} : { delivery: options.delivery }),
+                ...(options.login === undefined ? {} : { login: options.login }),
                 secretStatus,
               },
             ],
@@ -455,4 +457,63 @@ it.effect("a secret the card promised to keep from the agent is never written to
       assert.isTrue(valuesOf(stored).some((value) => value.includes("ghp_secret")));
     }),
   ),
+);
+
+const login = { tabId: "tab-1", url: "https://acme.test/login" };
+
+it.effect("a login stays in memory for one read and keeps its tab binding on the card", () =>
+  withService(
+    ({ service, stored, dispatched }) =>
+      Effect.gen(function* () {
+        yield* service.answer({
+          threadId,
+          turnItemId,
+          answer: { type: "login", username: "luka", password: " hunter2 " },
+        });
+        assert.include(dispatched[0] as object, { secretStatus: "saved" });
+        assert.deepEqual((dispatched[0] as { login?: unknown }).login, login);
+        assert.notInclude(JSON.stringify(dispatched), "hunter2");
+        assert.deepEqual(valuesOf(stored), []);
+        assert.isTrue(Option.isNone(yield* service.savedRef({ threadId, turnItemId })));
+        assert.deepEqual(Option.getOrThrow(yield* service.takeLogin({ threadId, turnItemId })), {
+          username: "luka",
+          password: " hunter2 ",
+        });
+        assert.isTrue(Option.isNone(yield* service.takeLogin({ threadId, turnItemId })));
+      }),
+    { login },
+  ),
+);
+
+it.effect("a login that loses to the card closing is forgotten", () =>
+  withService(
+    ({ service }) =>
+      Effect.gen(function* () {
+        const failure = yield* service
+          .answer({ threadId, turnItemId, answer: { type: "login", password: "hunter2" } })
+          .pipe(Effect.flip);
+        assert.equal(failure.reason, "agent_stopped");
+        assert.isTrue(Option.isNone(yield* service.takeLogin({ threadId, turnItemId })));
+      }),
+    { login, closedFirst: true },
+  ),
+);
+
+it.effect("logins and plain secrets cannot answer each other's cards", () =>
+  Effect.gen(function* () {
+    const asSecret = yield* withService(
+      ({ service }) =>
+        service
+          .answer({ threadId, turnItemId, answer: { type: "save", secret: "hunter2" } })
+          .pipe(Effect.flip),
+      { login },
+    );
+    assert.equal(asSecret.reason, "login_required");
+    const asLogin = yield* withService(({ service }) =>
+      service
+        .answer({ threadId, turnItemId, answer: { type: "login", password: "hunter2" } })
+        .pipe(Effect.flip),
+    );
+    assert.equal(asLogin.reason, "not_a_login_request");
+  }),
 );

@@ -4,6 +4,7 @@ import {
   ArrowRight,
   Camera,
   ExternalLink,
+  KeyRound,
   MousePointerClick,
   PictureInPicture2,
 } from "lucide-react";
@@ -40,6 +41,9 @@ interface Props {
   onPictureInPicture?: (() => void) | undefined;
   pictureInPicture?: boolean | undefined;
   pictureInPictureDisabled?: boolean | undefined;
+  /** The page's login prompt, when it has one. */
+  loginPrompt?: "shown" | "hidden" | undefined;
+  onToggleLoginPrompt?: (() => void) | undefined;
   onPickElement?: (() => void) | undefined;
   pickActive?: boolean | undefined;
   pickDisabled?: boolean | undefined;
@@ -69,6 +73,8 @@ export function PreviewChromeRow({
   onPictureInPicture,
   pictureInPicture,
   pictureInPictureDisabled,
+  loginPrompt,
+  onToggleLoginPrompt,
   onPickElement,
   pickActive,
   pickDisabled,
@@ -258,6 +264,27 @@ export function PreviewChromeRow({
             </TooltipTrigger>
             <TooltipPopup>
               {recording ? "Stop recording" : "Screenshot · Shift-click to record"}
+            </TooltipPopup>
+          </Tooltip>
+        ) : null}
+        {loginPrompt && onToggleLoginPrompt ? (
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Button
+                  variant={loginPrompt === "shown" ? "secondary" : "ghost"}
+                  size="icon-xs"
+                  onClick={onToggleLoginPrompt}
+                  aria-label={loginPrompt === "shown" ? "Hide login prompt" : "Fill a login"}
+                  aria-pressed={loginPrompt === "shown" ? "true" : "false"}
+                  type="button"
+                />
+              }
+            >
+              <KeyRound className={cn(loginPrompt === "shown" && "text-primary")} />
+            </TooltipTrigger>
+            <TooltipPopup>
+              {loginPrompt === "shown" ? "Hide login prompt" : "Fill a login on this page"}
             </TooltipPopup>
           </Tooltip>
         ) : null}

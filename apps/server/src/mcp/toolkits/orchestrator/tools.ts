@@ -14,6 +14,8 @@ import {
   OrchestratorMcpDeleteScheduledTaskInput,
   OrchestratorMcpDeleteScheduledTaskResult,
   OrchestratorMcpEnvironmentTarget,
+  OrchestratorMcpRequestLoginInput,
+  OrchestratorMcpRequestLoginResult,
   OrchestratorMcpRequestSecretInput,
   OrchestratorMcpRequestSecretResult,
   OrchestratorMcpFailure,
@@ -207,6 +209,18 @@ const RequestSecretTool = Tool.make("request_secret", {
   .annotate(Tool.Title, "Request a secret from the user")
   .annotate(Tool.Destructive, false);
 
+const RequestLoginTool = Tool.make("request_login", {
+  description:
+    "A login page in your server browser tab: ask the user to sign in and wait. The card shows the tab's URL, and the login goes only into that site's form, which T3 Code submits. You never see it. Then check the tab. Never ask for a password with request_secret or in chat.",
+  parameters: OrchestratorMcpRequestLoginInput,
+  success: OrchestratorMcpRequestLoginResult,
+  failure: OrchestratorMcpFailure,
+  failureMode: "return",
+  dependencies,
+})
+  .annotate(Tool.Title, "Ask the user to sign in")
+  .annotate(Tool.Destructive, false);
+
 const CreateThreadsTool = Tool.make("create_threads", {
   description:
     "Create new top-level threads in this checkout. Not delegation. One thread or its own worktree: `t3_thread_launch`. Project, branch, and worktree inherit.",
@@ -358,6 +372,7 @@ export const OrchestratorToolkit = Toolkit.make(
   ListScheduledTasksTool,
   DeleteScheduledTaskTool,
   RequestSecretTool,
+  RequestLoginTool,
   CreateThreadsTool,
   ThreadListTool,
   ThreadReadTool,

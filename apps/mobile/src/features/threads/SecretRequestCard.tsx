@@ -1,6 +1,7 @@
 import { pipe } from "effect/Function";
 import {
   SECRET_REQUEST_DEFAULT_PLACEHOLDER,
+  loginRequestUrl,
   secretRequestAnswerInput,
   secretRequestDisplay,
   secretRequestFailureMessage,
@@ -70,14 +71,13 @@ function PendingSecretRequestForm(props: {
     reportDefect: false,
   });
   const [secret, setSecret] = useState("");
+  const [username, setUsername] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // Submit then a tap can both run before a re-render; this guard is synchronous.
   const inFlight = useRef(false);
 
-  const send = async (
-    reply: { readonly type: "save"; readonly secret: string } | { readonly type: "decline" },
-  ) => {
+  const send = async (reply: Parameters<typeof secretRequestAnswerInput>[1]) => {
     const input = secretRequestAnswerInput(item, reply);
     if (input === null || inFlight.current) return;
     inFlight.current = true;
@@ -89,12 +89,19 @@ function PendingSecretRequestForm(props: {
     });
     if (result._tag === "Success") {
       setSecret("");
+      setUsername("");
       return;
     }
     if (!isAtomCommandInterrupted(result)) {
       pipe(squashAtomCommandFailure(result), secretRequestFailureMessage, setError);
     }
   };
+
+  const submit = () =>
+    void send(
+      item.login ? { type: "login", username, password: secret } : { type: "save", secret },
+    );
+  const loginUrl = item.login ? loginRequestUrl(item.login.url) : null;
 
   return (
     <View className="mb-3 gap-3 rounded-[20px] border border-border bg-card-alt p-4">
@@ -105,22 +112,46 @@ function PendingSecretRequestForm(props: {
             {item.reason}
           </Text>
         ) : null}
+        {loginUrl ? (
+          <Text className="font-sans text-xs text-foreground-muted" selectable>
+            <Text className="font-t3-bold text-xs text-foreground">{loginUrl.host}</Text>
+            {loginUrl.path}
+            {loginUrl.secure ? "" : " · not secure"}
+          </Text>
+        ) : null}
       </View>
+      {item.login ? (
+        <TextInput
+          accessibilityLabel="Username"
+          placeholder="Username or email (if the page asks)"
+          value={username}
+          onChangeText={setUsername}
+          editable={!submitting}
+          autoCorrect={false}
+          autoCapitalize="none"
+          autoComplete="username"
+          textContentType="username"
+          spellCheck={false}
+          returnKeyType="next"
+        />
+      ) : null}
       <TextInput
-        accessibilityLabel={item.label}
-        placeholder={item.placeholder ?? SECRET_REQUEST_DEFAULT_PLACEHOLDER}
+        accessibilityLabel={item.login ? "Password" : item.label}
+        placeholder={
+          item.login ? "Password" : (item.placeholder ?? SECRET_REQUEST_DEFAULT_PLACEHOLDER)
+        }
         value={secret}
         onChangeText={setSecret}
         editable={!submitting}
         secureTextEntry
         autoCorrect={false}
         autoCapitalize="none"
-        autoComplete="off"
-        textContentType="none"
-        importantForAutofill="no"
+        autoComplete={item.login ? "current-password" : "off"}
+        textContentType={item.login ? "password" : "none"}
+        importantForAutofill={item.login ? "yes" : "no"}
         spellCheck={false}
         returnKeyType="done"
-        onSubmitEditing={() => void send({ type: "save", secret })}
+        onSubmitEditing={submit}
       />
       {error !== null ? (
         <Text
@@ -132,11 +163,11 @@ function PendingSecretRequestForm(props: {
         </Text>
       ) : null}
       <Button
-        label="Save securely"
+        label={item.login ? "Sign in" : "Save securely"}
         tone="primary"
         fullWidth
-        disabled={submitting || secret.trim().length === 0}
-        onPress={() => void send({ type: "save", secret })}
+        disabled={submitting || (item.login ? secret.length === 0 : secret.trim().length === 0)}
+        onPress={submit}
       />
       <View className="flex-row items-center justify-between gap-2">
         <View className="flex-1 flex-row items-center gap-1.5">

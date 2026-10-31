@@ -37,7 +37,7 @@ export function CredentialPromptCard(props: {
     send({ type: "credential", promptId: prompt.id, action });
 
   const fill = (submit: boolean) => {
-    if (prompt.kind !== "password") return;
+    if (prompt.kind !== "password" || !canAnswer) return;
     send({
       type: "credential",
       promptId: prompt.id,
@@ -51,14 +51,14 @@ export function CredentialPromptCard(props: {
 
   return (
     <div
-      className="absolute inset-x-2 top-2 z-10 flex flex-col gap-2 rounded-lg border border-border bg-background p-3 shadow-lg"
+      className="absolute inset-x-2 top-2 z-10 flex max-h-[calc(100%-1rem)] flex-col gap-2 overflow-y-auto rounded-lg border border-border bg-background p-2.5 shadow-lg"
       role="dialog"
       aria-label={prompt.kind === "passkey" ? "Passkey request" : "Sign in"}
     >
       <div className="flex items-start gap-2">
-        <KeyRoundIcon className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
+        <KeyRoundIcon className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
         <div className="flex min-w-0 flex-col gap-0.5">
-          <p className="break-words text-sm">
+          <p className="text-xs font-medium wrap-anywhere">
             {prompt.kind === "passkey"
               ? `${prompt.rpId ?? host} wants to ${
                   prompt.action === "create" ? "save a new passkey" : "sign you in with a passkey"
@@ -78,22 +78,24 @@ export function CredentialPromptCard(props: {
               browser try.
             </p>
           ) : null}
+          {!canAnswer ? (
+            <p className="text-xs text-muted-foreground">Take control to respond.</p>
+          ) : null}
         </div>
       </div>
-      {!canAnswer ? (
-        <p className="text-xs text-muted-foreground">Take control to respond.</p>
-      ) : prompt.kind === "passkey" ? (
-        <div className="flex justify-end gap-2">
-          <Button variant="outline" size="sm" onClick={() => answer("deny")}>
+      {prompt.kind === "passkey" ? (
+        <div className="flex flex-wrap justify-end gap-1.5">
+          <Button variant="outline" size="xs" disabled={!canAnswer} onClick={() => answer("deny")}>
             Cancel
           </Button>
-          <Button size="sm" onClick={() => answer("allow")}>
+          <Button size="xs" disabled={!canAnswer} onClick={() => answer("allow")}>
             Let the browser try
           </Button>
         </div>
       ) : (
+        // Inputs stay mounted while control or the stream blips, so focus and typing survive.
         <form
-          className="flex flex-col gap-2"
+          className="flex flex-col gap-1.5"
           onSubmit={(event) => {
             event.preventDefault();
             fill(true);
@@ -101,6 +103,7 @@ export function CredentialPromptCard(props: {
         >
           {prompt.username ? (
             <Input
+              size="sm"
               aria-label="Username"
               placeholder="Username or email"
               autoComplete="username"
@@ -113,6 +116,7 @@ export function CredentialPromptCard(props: {
           {prompt.password ? (
             <InputGroup>
               <InputGroupInput
+                size="sm"
                 aria-label="Password"
                 placeholder="Password"
                 type={revealed ? "text" : "password"}
@@ -133,19 +137,21 @@ export function CredentialPromptCard(props: {
               </InputGroupAddon>
             </InputGroup>
           ) : null}
-          <div className="flex justify-end gap-2">
-            <Button type="button" variant="outline" size="sm" onClick={() => answer("dismiss")}>
+          <div className="flex flex-wrap justify-end gap-1.5">
+            <Button type="button" variant="ghost" size="xs" onClick={() => answer("dismiss")}>
               Not now
             </Button>
-            <Button type="button" variant="outline" size="sm" onClick={() => fill(false)}>
+            <Button
+              type="button"
+              variant="outline"
+              size="xs"
+              disabled={!canAnswer}
+              onClick={() => fill(false)}
+            >
               Fill
             </Button>
-            <Button type="submit" size="sm">
-              {prompt.password
-                ? prompt.signup
-                  ? "Fill and sign up"
-                  : "Fill and sign in"
-                : "Fill and continue"}
+            <Button type="submit" size="xs" disabled={!canAnswer}>
+              {prompt.password ? (prompt.signup ? "Sign up" : "Sign in") : "Continue"}
             </Button>
           </div>
         </form>

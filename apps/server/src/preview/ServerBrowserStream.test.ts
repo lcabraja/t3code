@@ -90,6 +90,8 @@ it.effect.each([
       clearProfile: () => Effect.void,
       profileReporter: Effect.succeed(() => Effect.void),
       openDownload: () => Effect.succeedNone,
+      tabUrl: () => Effect.succeedNone,
+      submitLogin: () => Effect.die("unused"),
       answerFileChooser: () => Effect.succeed(false),
       attachViewer: (input) =>
         Effect.sync(() => {
@@ -165,6 +167,8 @@ it.effect("sends replies ahead of stale frames and only the newest frame after a
       clearProfile: () => Effect.void,
       profileReporter: Effect.succeed(() => Effect.void),
       openDownload: () => Effect.succeedNone,
+      tabUrl: () => Effect.succeedNone,
+      submitLogin: () => Effect.die("unused"),
       answerFileChooser: () => Effect.succeed(false),
       attachViewer: () => Effect.succeed({ output, input: () => Effect.void }),
     });
@@ -236,6 +240,8 @@ it.effect.each([
       clearProfile: () => Effect.void,
       profileReporter: Effect.succeed(() => Effect.void),
       openDownload: () => Effect.succeedNone,
+      tabUrl: () => Effect.succeedNone,
+      submitLogin: () => Effect.die("unused"),
       answerFileChooser: () => Effect.succeed(false),
       attachViewer: () => {
         attachments++;
@@ -276,6 +282,8 @@ it.effect("serves a tab's download only to an authorized session", () =>
     const browser = ServerBrowser.ServerBrowser.of({
       clearProfile: () => Effect.void,
       profileReporter: Effect.succeed(() => Effect.void),
+      tabUrl: () => Effect.succeedNone,
+      submitLogin: () => Effect.die("unused"),
       openDownload: (input) =>
         Effect.sync(() => {
           requests.push(input);
@@ -325,6 +333,8 @@ it.effect("passes uploaded files to the page's open picker and needs operate sco
       clearProfile: () => Effect.void,
       profileReporter: Effect.succeed(() => Effect.void),
       openDownload: () => Effect.succeedNone,
+      tabUrl: () => Effect.succeedNone,
+      submitLogin: () => Effect.die("unused"),
       answerFileChooser: (input) =>
         Effect.sync(() => {
           answers.push({
@@ -394,6 +404,8 @@ it.effect.each([
       clearProfile: () => Effect.void,
       profileReporter: Effect.succeed(() => Effect.void),
       openDownload: () => Effect.succeedNone,
+      tabUrl: () => Effect.succeedNone,
+      submitLogin: () => Effect.die("unused"),
       answerFileChooser: () => Effect.succeed(false),
       attachViewer: () => Effect.fail(new ServerBrowser.ServerBrowserLaunchError({ cause: error })),
     });

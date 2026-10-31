@@ -49,6 +49,8 @@ export interface ServerBrowserHandle {
   readonly reload: (options?: { readonly ignoreCache?: boolean }) => void;
   readonly viewport: (setting: PreviewViewportSetting) => void;
   readonly canvas: () => HTMLCanvasElement | null;
+  /** Hides or brings back the page's login prompt. */
+  readonly toggleLoginPrompt: () => void;
 }
 
 const RESIZE_THROTTLE_MS = 150;
@@ -148,6 +150,8 @@ export function ServerBrowserSurface(props: {
   readonly onViewport?: (viewport: PreviewStreamViewport) => void;
   readonly onControl?: (control: PreviewStreamControl | null) => void;
   readonly onPopup?: (tabId: string) => void;
+  /** A login prompt is open (`shown`) or was dismissed (`hidden`). */
+  readonly onLoginPrompt?: (state: "shown" | "hidden" | null) => void;
   readonly className?: string;
   readonly pdfUrl?: string | null;
   readonly ref?: Ref<ServerBrowserHandle>;
@@ -163,6 +167,7 @@ export function ServerBrowserSurface(props: {
     onViewport,
     onControl,
     onPopup,
+    onLoginPrompt,
     className,
     pdfUrl = null,
     ref,
@@ -220,6 +225,12 @@ export function ServerBrowserSurface(props: {
   );
   const controlChanged = useEffectEvent((next: PreviewStreamControl | null) => onControl?.(next));
   const popupOpened = useEffectEvent((popupTabId: string) => onPopup?.(popupTabId));
+  const credentialRef = useRef<PreviewStreamCredentialPrompt | null>(null);
+  const credentialChanged = useEffectEvent((prompt: PreviewStreamCredentialPrompt | null) => {
+    credentialRef.current = prompt;
+    setCredentialPrompt(prompt);
+    onLoginPrompt?.(prompt?.kind === "password" ? (prompt.dismissed ? "hidden" : "shown") : null);
+  });
   const [cap, setCap] = useState<{ width: number; height: number } | null>(null);
 
   // Keep clearInput stable: a new identity reconnects the stream.
@@ -314,6 +325,15 @@ export function ServerBrowserSurface(props: {
         send({ type: "reload", ...(options?.ignoreCache ? { ignoreCache: true } : {}) }),
       viewport: (setting) => send({ type: "viewport", setting }),
       canvas: () => (!pdfUrl && hasFrameRef.current ? canvasRef.current : null),
+      toggleLoginPrompt: () => {
+        const prompt = credentialRef.current;
+        if (prompt?.kind !== "password") return;
+        send({
+          type: "credential",
+          promptId: prompt.id,
+          action: prompt.dismissed ? "reopen" : "dismiss",
+        });
+      },
     }),
     [pdfUrl, send],
   );
@@ -401,7 +421,7 @@ export function ServerBrowserSurface(props: {
         onDownload: offerDownload,
         onPopup: popupOpened,
         onFileChooser: setFileChooser,
-        onCredential: setCredentialPrompt,
+        onCredential: credentialChanged,
         onViewport: (viewport) => {
           viewportRef.current = viewport;
           viewportChanged(viewport);
@@ -426,7 +446,6 @@ export function ServerBrowserSurface(props: {
         onConnectedChange: (connected) => {
           if (connected) return;
           setFileChooser(null);
-          setCredentialPrompt(null);
           controlRef.current = null;
           setControl(null);
           controlChanged(null);
@@ -837,7 +856,10 @@ export function ServerBrowserSurface(props: {
             </div>
           </div>
         ) : null}
-        {credentialPrompt && !control?.dialog && !fileChooser ? (
+        {credentialPrompt &&
+        !(credentialPrompt.kind === "password" && credentialPrompt.dismissed) &&
+        !control?.dialog &&
+        !fileChooser ? (
           <CredentialPromptCard
             key={credentialPrompt.id}
             prompt={credentialPrompt}

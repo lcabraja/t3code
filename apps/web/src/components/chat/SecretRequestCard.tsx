@@ -1,5 +1,6 @@
 import { pipe } from "effect/Function";
 import {
+  loginRequestUrl,
   SECRET_REQUEST_DEFAULT_PLACEHOLDER,
   secretRequestAnswerInput,
   secretRequestDisplay,
@@ -12,13 +13,14 @@ import {
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
 import type { EnvironmentId, OrchestrationV2ProjectedTurnItem } from "@t3tools/contracts";
-import { CheckIcon, LockIcon, MinusIcon, ShieldCheckIcon } from "lucide-react";
+import { CheckIcon, GlobeIcon, LockIcon, MinusIcon, ShieldCheckIcon } from "lucide-react";
 import { useId, useRef, useState, type FormEvent } from "react";
 
 import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { WorkLogRow } from "./WorkLog";
 
 export function SecretRequestCard(props: {
@@ -50,6 +52,8 @@ export function SecretRequestCard(props: {
   return <PendingSecretRequestForm environmentId={props.environmentId} item={item} />;
 }
 
+type SecretRequestReply = Parameters<typeof secretRequestAnswerInput>[1];
+
 function PendingSecretRequestForm(props: {
   readonly environmentId: EnvironmentId;
   readonly item: SecretRequestItem;
@@ -65,14 +69,13 @@ function PendingSecretRequestForm(props: {
     reportDefect: false,
   });
   const [secret, setSecret] = useState("");
+  const [username, setUsername] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // Enter and click can both submit before a render.
   const inFlight = useRef(false);
 
-  const send = async (
-    reply: { readonly type: "save"; readonly secret: string } | { readonly type: "decline" },
-  ) => {
+  const send = async (reply: SecretRequestReply) => {
     const input = secretRequestAnswerInput(item, reply);
     if (input === null || inFlight.current) return;
     inFlight.current = true;
@@ -84,6 +87,7 @@ function PendingSecretRequestForm(props: {
     });
     if (result._tag === "Success") {
       setSecret("");
+      setUsername("");
       return;
     }
     if (!isAtomCommandInterrupted(result)) {
@@ -93,15 +97,18 @@ function PendingSecretRequestForm(props: {
 
   const onSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    void send({ type: "save", secret });
+    void send(
+      item.login ? { type: "login", username, password: secret } : { type: "save", secret },
+    );
   };
+  const loginUrl = item.login ? loginRequestUrl(item.login.url) : null;
 
   return (
     <form
       data-v2-item-type={item.type}
       className="flex min-w-0 flex-col gap-3 rounded-xl border border-border/60 bg-card p-4"
       onSubmit={onSubmit}
-      autoComplete="off"
+      autoComplete={item.login ? "on" : "off"}
       // On click, not pointerdown: the mousedown that follows a pointerdown
       // moves focus back off the input. A click that ends a text selection
       // leaves it alone so the reason can still be copied.
@@ -119,22 +126,52 @@ function PendingSecretRequestForm(props: {
         {item.reason.trim() ? (
           <p className="text-sm wrap-anywhere text-muted-foreground">{item.reason}</p>
         ) : null}
+        {item.login && loginUrl ? (
+          <p className="flex min-w-0 items-start gap-1.5 text-xs text-muted-foreground">
+            {loginUrl.secure ? (
+              <LockIcon className="mt-px size-3.5 shrink-0" aria-label="Secure connection" />
+            ) : (
+              <GlobeIcon className="mt-px size-3.5 shrink-0" aria-label="Not a secure connection" />
+            )}
+            <Tooltip>
+              <TooltipTrigger render={<span className="min-w-0 wrap-anywhere" />}>
+                <span className="font-medium text-foreground">{loginUrl.host}</span>
+                {loginUrl.path}
+              </TooltipTrigger>
+              <TooltipPopup className="wrap-anywhere">{item.login.url}</TooltipPopup>
+            </Tooltip>
+          </p>
+        ) : null}
       </div>
+      {item.login ? (
+        <Input
+          aria-label="Username"
+          placeholder="Username or email (if the page asks)"
+          autoComplete="username"
+          autoCapitalize="off"
+          spellCheck={false}
+          value={username}
+          disabled={submitting}
+          onChange={(event) => setUsername(event.currentTarget.value)}
+        />
+      ) : null}
       <div className="flex min-w-0 items-center gap-2">
         <div className="min-w-0 flex-1">
           <Input
             id={inputId}
-            // Password fields prompt to save credentials; this secret is not a login.
-            type="text"
-            className="[-webkit-text-security:disc]"
-            autoComplete="off"
+            // Password fields prompt to save credentials; a plain secret is not a login.
+            type={item.login ? "password" : "text"}
+            className={item.login ? undefined : "[-webkit-text-security:disc]"}
+            autoComplete={item.login ? "current-password" : "off"}
             autoCorrect="off"
             autoCapitalize="off"
             spellCheck={false}
-            data-1p-ignore
-            data-lpignore="true"
-            data-bwignore
-            placeholder={item.placeholder ?? SECRET_REQUEST_DEFAULT_PLACEHOLDER}
+            {...(item.login
+              ? {}
+              : { "data-1p-ignore": true, "data-lpignore": "true", "data-bwignore": true })}
+            placeholder={
+              item.login ? "Password" : (item.placeholder ?? SECRET_REQUEST_DEFAULT_PLACEHOLDER)
+            }
             value={secret}
             disabled={submitting}
             aria-invalid={error !== null || undefined}
@@ -142,8 +179,11 @@ function PendingSecretRequestForm(props: {
             onChange={(event) => setSecret(event.currentTarget.value)}
           />
         </div>
-        <Button type="submit" disabled={submitting || secret.trim().length === 0}>
-          Save securely
+        <Button
+          type="submit"
+          disabled={submitting || (item.login ? secret.length === 0 : secret.trim().length === 0)}
+        >
+          {item.login ? "Sign in" : "Save securely"}
         </Button>
       </div>
       {error !== null ? (

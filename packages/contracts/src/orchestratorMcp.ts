@@ -25,6 +25,7 @@ import {
   ScheduledTaskSchedule,
   ScheduledTaskUpsertSchedule,
 } from "./scheduledTask.ts";
+import { PreviewTabId } from "./preview.ts";
 import { ProviderInteractionMode, ProviderRequestKind, RuntimeMode } from "./providerPolicy.ts";
 import { PullRequestState } from "./pullRequest.ts";
 import {
@@ -768,6 +769,43 @@ export const OrchestratorMcpRequestSecretResult = Schema.Union([
   }),
 ]);
 export type OrchestratorMcpRequestSecretResult = typeof OrchestratorMcpRequestSecretResult.Type;
+
+export const OrchestratorMcpRequestLoginInput = Schema.Struct({
+  tabId: PreviewTabId.annotate({
+    description:
+      "Your server browser tab showing the login page, from preview_open or preview_status.",
+  }),
+  reason: TrimmedNonEmptyString.annotate({
+    description: "Why you need to sign in, in one sentence.",
+  }),
+  timeoutMs: Schema.optional(
+    Schema.Int.check(Schema.isBetween({ minimum: 1_000, maximum: 60 * 60 * 1_000 })),
+  ).annotate({ description: "Default 10 min." }),
+  clientRequestId: Schema.optional(OrchestratorMcpClientRequestId).annotate({
+    description: "Retry key for this ask. New key after a timeout or cancel.",
+  }),
+});
+export type OrchestratorMcpRequestLoginInput = typeof OrchestratorMcpRequestLoginInput.Type;
+
+export const OrchestratorMcpRequestLoginResult = Schema.Union([
+  Schema.Struct({
+    status: Schema.Literal("submitted").annotate({
+      description: "The login was filled and submitted. Check the tab to see whether it worked.",
+    }),
+    url: Schema.String,
+  }),
+  Schema.Struct({
+    status: Schema.Literal("not_filled"),
+    reason: Schema.String,
+  }),
+  Schema.Struct({
+    status: Schema.Literals(["declined", "cancelled", "timed_out"]).annotate({
+      description:
+        "declined: user chose not to. cancelled: ended with the run. timed_out: no answer in time.",
+    }),
+  }),
+]);
+export type OrchestratorMcpRequestLoginResult = typeof OrchestratorMcpRequestLoginResult.Type;
 
 export const OrchestratorMcpEnvironmentLinkInput = Schema.Struct({
   environmentId: Schema.optional(EnvironmentId).annotate({

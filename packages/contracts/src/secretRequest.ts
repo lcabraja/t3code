@@ -9,6 +9,12 @@ export const SecretRequestAnswerInput = Schema.Struct({
   answer: Schema.Union([
     Schema.Struct({ type: Schema.Literal("save"), secret: TrimmedNonEmptyString }),
     Schema.Struct({ type: Schema.Literal("decline") }),
+    // Not trimmed: spaces can be part of a password.
+    Schema.Struct({
+      type: Schema.Literal("login"),
+      username: Schema.optional(Schema.String.check(Schema.isMaxLength(4096))),
+      password: Schema.String.check(Schema.isNonEmpty(), Schema.isMaxLength(4096)),
+    }),
   ]),
 });
 export type SecretRequestAnswerInput = typeof SecretRequestAnswerInput.Type;
@@ -26,6 +32,8 @@ const SECRET_REQUEST_FAILURE_MESSAGES = {
     "That secretRef was already used or does not exist. Ask the user again with request_secret.",
   ref_expired: "That secretRef expired. Ask the user again with request_secret.",
   consume_failed: "Could not use that secretRef. Try again.",
+  not_a_login_request: "This request asks for a secret, not a login.",
+  login_required: "This request asks for a login. Enter a password.",
   not_a_file_request:
     'The user did not save this secret for shell use. Ask again with request_secret and delivery: "file".',
 } as const;

@@ -247,6 +247,7 @@ export type CredentialPrompt =
       readonly username: boolean;
       readonly password: boolean;
       readonly signup: boolean;
+      readonly dismissed: boolean;
     }
   | {
       readonly id: string;

@@ -255,6 +255,23 @@ export class ServerBrowser extends Context.Service<
 
     readonly clearProfile: (profileId: string) => Effect.Effect<void, PreviewClearProfileError>;
 
+    /** The page a thread's server tab shows, if that tab is open. */
+    readonly tabUrl: (input: {
+      readonly threadId: string;
+      readonly tabId: string;
+    }) => Effect.Effect<Option.Option<string>>;
+    /** Fills and submits a login in the tab, only into forms on `origin`. */
+    readonly submitLogin: (input: {
+      readonly threadId: string;
+      readonly tabId: string;
+      readonly origin: string;
+      readonly username?: string;
+      readonly password: string;
+    }) => Effect.Effect<
+      | { readonly status: "submitted"; readonly url: string }
+      | { readonly status: "not_filled"; readonly reason: string }
+    >;
+
     readonly profileReporter: Effect.Effect<ProfileReporter, never, Scope.Scope>;
   }
 >()("t3/preview/ServerBrowser") {}
@@ -322,8 +339,11 @@ interface ServerTab {
   readonly autofill: {
     form: PendingCredential | null;
     passkey: (PendingCredential & { readonly requestId: string }) | null;
-    /** A dismissed form stays quiet until the user focuses one of its fields. */
+    /** A dismissed form stays hidden until the user focuses a field or reopens it. */
     dismissedDoc: string | null;
+    /** Set while an agent's login fills the tab, so viewers are not also asked. */
+    agentFilling: boolean;
+    readonly changed: Set<() => void>;
   };
   setting: PreviewViewportSetting;
   colorScheme: PreviewAppearancePreference;
@@ -865,7 +885,13 @@ const make = Effect.gen(function* () {
       downloads: [],
       fileChooser: null,
       dialog: null,
-      autofill: { form: null, passkey: null, dismissedDoc: null },
+      autofill: {
+        form: null,
+        passkey: null,
+        dismissedDoc: null,
+        agentFilling: false,
+        changed: new Set(),
+      },
       setting: snapshot.viewport ?? FILL_PREVIEW_VIEWPORT,
       colorScheme: "system",
       zoomFactor: 1,
@@ -1288,12 +1314,17 @@ const make = Effect.gen(function* () {
     watchAutofill(tab, cdp);
   };
 
-  const credentialPrompt = (tab: ServerTab) =>
-    tab.autofill.passkey?.prompt ?? tab.autofill.form?.prompt ?? null;
+  const credentialPrompt = (tab: ServerTab): CredentialPrompt | null => {
+    const { passkey, form, dismissedDoc, agentFilling } = tab.autofill;
+    if (passkey) return passkey.prompt;
+    if (!form || agentFilling || form.prompt.kind !== "password") return null;
+    return { ...form.prompt, dismissed: form.doc === dismissedDoc };
+  };
 
   const pushCredential = (tab: ServerTab) => {
     const prompt = credentialPrompt(tab);
     for (const viewer of tab.viewers) viewer.push({ _tag: "credential", prompt });
+    for (const changed of tab.autofill.changed) changed();
   };
 
   const onAutofillReport = (
@@ -1312,7 +1343,6 @@ const make = Effect.gen(function* () {
     switch (report.type) {
       case "form": {
         if (report.focused) autofill.dismissedDoc = null;
-        else if (autofill.dismissedDoc === report.doc) return;
         const previous = autofill.form;
         autofill.form = {
           session,
@@ -1329,6 +1359,7 @@ const make = Effect.gen(function* () {
             username: report.username,
             password: report.password,
             signup: report.signup,
+            dismissed: false,
           },
         };
         break;
@@ -1389,6 +1420,92 @@ const make = Effect.gen(function* () {
     session.on("Runtime.executionContextsCleared", () => forget(() => true));
   };
 
+  const nextForm = (tab: ServerTab, timeoutMs: number) =>
+    new Promise<PendingCredential | null>((resolve) => {
+      const done = (form: PendingCredential | null) => {
+        clearTimeout(timer);
+        tab.autofill.changed.delete(check);
+        resolve(form);
+      };
+      const check = () => {
+        if (tab.closing) done(null);
+        else if (tab.autofill.form) done(tab.autofill.form);
+      };
+      const timer = setTimeout(() => done(null), timeoutMs);
+      tab.autofill.changed.add(check);
+      check();
+    });
+
+  const pageOrigin = (tab: ServerTab) => {
+    try {
+      return new URL(tab.page.url()).origin;
+    } catch {
+      return null;
+    }
+  };
+
+  // Up to two steps covers identifier-first logins, which ask for the password on a second form.
+  const fillAgentLogin = async (
+    tab: ServerTab,
+    input: Parameters<ServerBrowser["Service"]["submitLogin"]>[0],
+  ): Promise<Effect.Success<ReturnType<ServerBrowser["Service"]["submitLogin"]>>> => {
+    let username = input.username;
+    let password: string | undefined = input.password;
+    for (let step = 0; step < 2 && password !== undefined; step++) {
+      const form = await nextForm(tab, step === 0 ? 5_000 : 10_000);
+      if (!form) break;
+      if (pageOrigin(tab) !== input.origin || form.prompt.origin !== input.origin)
+        return {
+          status: "not_filled",
+          reason: `The tab moved to ${pageOrigin(tab) ?? "another page"}, not the site the user approved (${input.origin}).`,
+        };
+      if (form.prompt.kind !== "password") break;
+      const fillUsername = form.prompt.username ? username : undefined;
+      const fillPassword = form.prompt.password ? password : undefined;
+      if (fillUsername === undefined && fillPassword === undefined) break;
+      tab.autofill.form = null;
+      await fillLogin(form.session, form.contextId, {
+        ...(fillUsername === undefined ? {} : { username: fillUsername }),
+        ...(fillPassword === undefined ? {} : { password: fillPassword }),
+        submit: true,
+      });
+      if (fillUsername !== undefined) username = undefined;
+      if (fillPassword !== undefined) password = undefined;
+    }
+    if (password !== undefined)
+      return {
+        status: "not_filled",
+        reason:
+          username === undefined
+            ? "Filled the username, but no password field appeared."
+            : "No login form was found in the tab.",
+      };
+    return { status: "submitted", url: tab.page.url() };
+  };
+
+  const submitLogin: ServerBrowser["Service"]["submitLogin"] = (input) =>
+    Effect.promise(async () => {
+      const tab = tabs.get(tabKey(input.threadId, input.tabId));
+      if (!tab || tab.closing)
+        return { status: "not_filled" as const, reason: "The tab was closed." };
+      tab.autofill.agentFilling = true;
+      pushCredential(tab);
+      try {
+        return await fillAgentLogin(tab, input);
+      } catch {
+        return { status: "not_filled" as const, reason: "The page stopped responding." };
+      } finally {
+        tab.autofill.agentFilling = false;
+        pushCredential(tab);
+      }
+    });
+
+  const tabUrl: ServerBrowser["Service"]["tabUrl"] = (input) =>
+    findTab(input.threadId, input.tabId).pipe(
+      Effect.map((tab) => Option.some(tab.page.url())),
+      Effect.orElseSucceed(() => Option.none<string>()),
+    );
+
   const answerCredential = async (tab: ServerTab, message: Record<string, unknown>) => {
     const { form, passkey } = tab.autofill;
     if (passkey && passkey.prompt.id === message.promptId) {
@@ -1403,10 +1520,15 @@ const make = Effect.gen(function* () {
       return;
     }
     if (!form || form.prompt.id !== message.promptId) return;
-    tab.autofill.form = null;
-    if (message.action !== "fill") tab.autofill.dismissedDoc = form.doc;
-    pushCredential(tab);
+    if (message.action === "dismiss" || message.action === "reopen") {
+      tab.autofill.dismissedDoc = message.action === "dismiss" ? form.doc : null;
+      pushCredential(tab);
+      return;
+    }
     if (message.action !== "fill") return;
+    // Cleared so the next step of an identifier-first login asks again.
+    tab.autofill.form = null;
+    pushCredential(tab);
     const value = (field: unknown) =>
       typeof field === "string" && field.length > 0 ? field.slice(0, 4096) : undefined;
     const username = value(message.username);
@@ -2794,7 +2916,10 @@ const make = Effect.gen(function* () {
                   : {}),
               });
             } else if (message.type === "credential") {
-              await tab.control.human(viewer.id, () => answerCredential(tab, message));
+              // Hiding or showing the card leaves the page alone, so it needs no control.
+              if (message.action === "dismiss" || message.action === "reopen")
+                await answerCredential(tab, message);
+              else await tab.control.human(viewer.id, () => answerCredential(tab, message));
             } else {
               const dispatch = () => dispatchViewerInput(tab, session, viewer, message);
               if (
@@ -2908,6 +3033,8 @@ const make = Effect.gen(function* () {
     profileReporter,
     openDownload,
     answerFileChooser,
+    tabUrl,
+    submitLogin,
   });
 });
 

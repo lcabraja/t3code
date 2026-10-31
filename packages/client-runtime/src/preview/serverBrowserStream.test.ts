@@ -87,6 +87,7 @@ describe("preview stream control", () => {
     expect(client.send({ type: "takeControl" })).toBe(false);
     expect(client.send({ type: "resize", width: 390, height: 844 })).toBe(false);
     expect(client.send({ type: "reload" })).toBe(false);
+    expect(client.send({ type: "highlight", field: "password" })).toBe(false);
     expect(socket.sent).toEqual(['{"type":"ack"}']);
     client.stop();
   });
@@ -105,6 +106,12 @@ describe("preview stream control", () => {
     socket.control({ ...agent, generation: 2 });
     expect(client.send({ type: "text", text: "late input" })).toBe(false);
     expect(client.send({ type: "dialog", accept: false })).toBe(false);
+    expect(client.send({ type: "credential", promptId: "p1", action: "fill", password: "x" })).toBe(
+      false,
+    );
+    // Showing a field or the login card leaves the page alone, so control is not needed.
+    expect(client.send({ type: "highlight", field: "password" })).toBe(true);
+    expect(client.send({ type: "credential", promptId: "p1", action: "reopen" })).toBe(true);
     client.stop();
   });
 });

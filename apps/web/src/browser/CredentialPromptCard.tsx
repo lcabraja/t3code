@@ -105,7 +105,7 @@ export function CredentialPromptCard(props: {
             <Input
               size="sm"
               aria-label="Username"
-              placeholder="Username or email"
+              placeholder={prompt.usernameLabel ?? "Username or email"}
               autoComplete="username"
               autoCapitalize="off"
               spellCheck={false}
@@ -118,7 +118,7 @@ export function CredentialPromptCard(props: {
               <InputGroupInput
                 size="sm"
                 aria-label="Password"
-                placeholder="Password"
+                placeholder={prompt.passwordLabel ?? "Password"}
                 type={revealed ? "text" : "password"}
                 autoComplete={prompt.signup ? "new-password" : "current-password"}
                 value={password}

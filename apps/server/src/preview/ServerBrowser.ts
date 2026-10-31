@@ -88,6 +88,7 @@ import { BrowserControlInterrupted, SessionControl } from "./SessionControl.ts";
 import { installPdfDocumentNavigation, isPdfAssetUrl } from "./PdfDocumentNavigation.ts";
 import {
   answerPasskey,
+  highlightField,
   type AutofillReport,
   type CredentialPrompt,
   fillLogin,
@@ -219,6 +220,11 @@ export interface ServerBrowserViewer {
   readonly input: (message: unknown) => Effect.Effect<void>;
 }
 
+export type LoginPageFields = ReadonlyArray<{
+  readonly kind: "username" | "password";
+  readonly label: string | null;
+}>;
+
 export type ProfileReporter = (input: PreviewReportProfilesInput) => Effect.Effect<void>;
 
 export class ServerBrowser extends Context.Service<
@@ -255,11 +261,16 @@ export class ServerBrowser extends Context.Service<
 
     readonly clearProfile: (profileId: string) => Effect.Effect<void, PreviewClearProfileError>;
 
-    /** The page a thread's server tab shows, if that tab is open. */
-    readonly tabUrl: (input: {
+    /** The page a thread's server tab shows and its login fields, if that tab is open. */
+    readonly loginPage: (input: {
       readonly threadId: string;
       readonly tabId: string;
-    }) => Effect.Effect<Option.Option<string>>;
+    }) => Effect.Effect<Option.Option<{ readonly url: string; readonly fields: LoginPageFields }>>;
+    /** Hides the panel's login card for the tab while an agent's login request is open. */
+    readonly holdLoginPrompt: (input: {
+      readonly threadId: string;
+      readonly tabId: string;
+    }) => Effect.Effect<void, never, Scope.Scope>;
     /** Fills and submits a login in the tab, only into forms on `origin`. */
     readonly submitLogin: (input: {
       readonly threadId: string;
@@ -341,8 +352,8 @@ interface ServerTab {
     passkey: (PendingCredential & { readonly requestId: string }) | null;
     /** A dismissed form stays hidden until the user focuses a field or reopens it. */
     dismissedDoc: string | null;
-    /** Set while an agent's login fills the tab, so viewers are not also asked. */
-    agentFilling: boolean;
+    /** Agent login requests open on this tab; the chat card asks, so the panel stays quiet. */
+    agentLogins: number;
     readonly changed: Set<() => void>;
   };
   setting: PreviewViewportSetting;
@@ -889,7 +900,7 @@ const make = Effect.gen(function* () {
         form: null,
         passkey: null,
         dismissedDoc: null,
-        agentFilling: false,
+        agentLogins: 0,
         changed: new Set(),
       },
       setting: snapshot.viewport ?? FILL_PREVIEW_VIEWPORT,
@@ -1315,9 +1326,9 @@ const make = Effect.gen(function* () {
   };
 
   const credentialPrompt = (tab: ServerTab): CredentialPrompt | null => {
-    const { passkey, form, dismissedDoc, agentFilling } = tab.autofill;
+    const { passkey, form, dismissedDoc, agentLogins } = tab.autofill;
     if (passkey) return passkey.prompt;
-    if (!form || agentFilling || form.prompt.kind !== "password") return null;
+    if (!form || agentLogins > 0 || form.prompt.kind !== "password") return null;
     return { ...form.prompt, dismissed: form.doc === dismissedDoc };
   };
 
@@ -1359,6 +1370,8 @@ const make = Effect.gen(function* () {
             username: report.username,
             password: report.password,
             signup: report.signup,
+            usernameLabel: report.usernameLabel,
+            passwordLabel: report.passwordLabel,
             dismissed: false,
           },
         };
@@ -1488,23 +1501,58 @@ const make = Effect.gen(function* () {
       const tab = tabs.get(tabKey(input.threadId, input.tabId));
       if (!tab || tab.closing)
         return { status: "not_filled" as const, reason: "The tab was closed." };
-      tab.autofill.agentFilling = true;
-      pushCredential(tab);
       try {
         return await fillAgentLogin(tab, input);
       } catch {
         return { status: "not_filled" as const, reason: "The page stopped responding." };
-      } finally {
-        tab.autofill.agentFilling = false;
-        pushCredential(tab);
       }
     });
 
-  const tabUrl: ServerBrowser["Service"]["tabUrl"] = (input) =>
+  const holdLoginPrompt: ServerBrowser["Service"]["holdLoginPrompt"] = (input) =>
+    Effect.acquireRelease(
+      Effect.sync(() => {
+        const tab = tabs.get(tabKey(input.threadId, input.tabId));
+        if (!tab) return undefined;
+        tab.autofill.agentLogins += 1;
+        pushCredential(tab);
+        return tab;
+      }),
+      (tab) =>
+        Effect.sync(() => {
+          if (!tab) return;
+          tab.autofill.agentLogins -= 1;
+          pushCredential(tab);
+        }),
+    ).pipe(Effect.asVoid);
+
+  // A page that is still loading gets a moment to show its form.
+  const loginPage: ServerBrowser["Service"]["loginPage"] = (input) =>
     findTab(input.threadId, input.tabId).pipe(
-      Effect.map((tab) => Option.some(tab.page.url())),
-      Effect.orElseSucceed(() => Option.none<string>()),
+      Effect.flatMap((tab) =>
+        Effect.promise(async () => {
+          const prompt = (await nextForm(tab, 3_000))?.prompt;
+          const fields: LoginPageFields =
+            prompt?.kind !== "password"
+              ? []
+              : [
+                  ...(prompt.username
+                    ? [{ kind: "username" as const, label: prompt.usernameLabel }]
+                    : []),
+                  ...(prompt.password
+                    ? [{ kind: "password" as const, label: prompt.passwordLabel }]
+                    : []),
+                ];
+          return Option.some({ url: tab.page.url(), fields });
+        }),
+      ),
+      Effect.orElseSucceed(() => Option.none()),
     );
+
+  const highlightLoginField = async (tab: ServerTab, field: unknown) => {
+    const form = tab.autofill.form;
+    if (!form || (field !== "username" && field !== "password")) return;
+    await highlightField(form.session, form.contextId, field);
+  };
 
   const answerCredential = async (tab: ServerTab, message: Record<string, unknown>) => {
     const { form, passkey } = tab.autofill;
@@ -2915,6 +2963,8 @@ const make = Effect.gen(function* () {
                   ? { promptText: message.promptText }
                   : {}),
               });
+            } else if (message.type === "highlight") {
+              await highlightLoginField(tab, message.field);
             } else if (message.type === "credential") {
               // Hiding or showing the card leaves the page alone, so it needs no control.
               if (message.action === "dismiss" || message.action === "reopen")
@@ -3033,7 +3083,8 @@ const make = Effect.gen(function* () {
     profileReporter,
     openDownload,
     answerFileChooser,
-    tabUrl,
+    loginPage,
+    holdLoginPrompt,
     submitLogin,
   });
 });

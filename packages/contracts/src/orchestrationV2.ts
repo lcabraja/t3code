@@ -1513,9 +1513,19 @@ export type OrchestrationV2SecretRequestStatus = typeof OrchestrationV2SecretReq
 export const OrchestrationV2SecretRequestDelivery = Schema.Literal("file");
 
 /** A login bound by the server to one browser tab; the agent cannot change where it goes. */
+export const OrchestrationV2SecretRequestLoginField = Schema.Struct({
+  kind: Schema.Literals(["username", "password"]),
+  /** The field's label as the page shows it. */
+  label: Schema.NullOr(Schema.String),
+});
+export type OrchestrationV2SecretRequestLoginField =
+  typeof OrchestrationV2SecretRequestLoginField.Type;
+
 export const OrchestrationV2SecretRequestLogin = Schema.Struct({
   tabId: Schema.String,
   url: Schema.String,
+  /** The login fields the page showed when the agent asked. */
+  fields: Schema.optional(Schema.Array(OrchestrationV2SecretRequestLoginField)),
 });
 export type OrchestrationV2SecretRequestLogin = typeof OrchestrationV2SecretRequestLogin.Type;
 

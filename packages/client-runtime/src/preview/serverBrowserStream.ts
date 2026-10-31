@@ -60,6 +60,9 @@ export type PreviewStreamCredentialPrompt =
       readonly username: boolean;
       readonly password: boolean;
       readonly signup: boolean;
+      /** Each field's label as the page shows it. */
+      readonly usernameLabel: string | null;
+      readonly passwordLabel: string | null;
       /** Dismissed for this page; the viewer can bring it back. */
       readonly dismissed: boolean;
     }
@@ -88,8 +91,19 @@ const parseCredentialPrompt = (
   if (kind === "password") {
     const { username, password, signup } = prompt;
     if (typeof username !== "boolean" || typeof password !== "boolean") return undefined;
-    const dismissed = prompt.dismissed === true;
-    return { id, kind, origin, topOrigin, username, password, signup: signup === true, dismissed };
+    const label = (value: unknown) => (typeof value === "string" && value ? value : null);
+    return {
+      id,
+      kind,
+      origin,
+      topOrigin,
+      username,
+      password,
+      signup: signup === true,
+      usernameLabel: label(prompt.usernameLabel),
+      passwordLabel: label(prompt.passwordLabel),
+      dismissed: prompt.dismissed === true,
+    };
   }
   if (kind === "passkey") {
     const { action, rpId, userName } = prompt;
@@ -142,6 +156,8 @@ export type PreviewStreamInput =
   | { readonly type: "history"; readonly delta: -1 | 1 }
   | { readonly type: "reload"; readonly ignoreCache?: boolean }
   | { readonly type: "probe"; readonly x: number; readonly y: number }
+  /** Outlines the page's login field for a moment; it does not need control. */
+  | { readonly type: "highlight"; readonly field: "username" | "password" }
   | {
       readonly type: "credential";
       readonly promptId: string;
@@ -266,6 +282,11 @@ export interface PreviewStreamClient {
 }
 
 const ACK_MESSAGE = JSON.stringify({ type: "ack" });
+// These leave the page alone, so a viewer may send them while someone else has control.
+const viewOnly = (input: PreviewStreamInput) =>
+  input.type === "takeControl" ||
+  input.type === "highlight" ||
+  (input.type === "credential" && (input.action === "dismiss" || input.action === "reopen"));
 export function createPreviewStreamClient(
   target: PreviewStreamTarget,
   events: PreviewStreamEvents,
@@ -440,7 +461,7 @@ export function createPreviewStreamClient(
     send: (input) => {
       if (socket?.readyState !== WebSocket.OPEN) return false;
       if (!control?.canOperate) return false;
-      if (input.type !== "takeControl" && control.controller !== "you") return false;
+      if (!viewOnly(input) && control.controller !== "you") return false;
       socket.send(JSON.stringify(input));
       return true;
     },

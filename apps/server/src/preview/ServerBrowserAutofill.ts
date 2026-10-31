@@ -105,6 +105,18 @@ const AUTOFILL_SCRIPT = `(() => {
   const isUsername = (field) =>
     TEXT_TYPES.has(field.type) &&
     (autocompletes(field, /\\b(username|email|webauthn)\\b/) || field.type === "email" || USERNAME_HINT.test(hint(field)));
+  // What the page shows for a field, so the user can match it to the page.
+  const describe = (field) => {
+    if (!field) return null;
+    const byIds = (field.getAttribute("aria-labelledby") ?? "")
+      .split(/\\s+/)
+      .map((id) => field.getRootNode().getElementById?.(id)?.textContent ?? "")
+      .join(" ");
+    const text = [field.labels?.[0]?.textContent, byIds, field.getAttribute("aria-label"), field.placeholder, field.title]
+      .map((value) => (value ?? "").replace(/\\s+/g, " ").trim())
+      .find((value) => value.length > 0);
+    return text ? text.slice(0, 80) : null;
+  };
   const precedes = (a, b) => (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
 
   let current = { username: null, passwords: [], signup: false };
@@ -135,8 +147,10 @@ const AUTOFILL_SCRIPT = `(() => {
   let filling = false;
   const scan = (focused) => {
     current = find();
+    const usernameLabel = describe(current.username);
+    const passwordLabel = describe(current.passwords[0]);
     const state = current.username || current.passwords.length > 0
-      ? [!!current.username, current.passwords.length > 0, current.signup].join()
+      ? [!!current.username, current.passwords.length > 0, current.signup, usernameLabel, passwordLabel].join()
       : "";
     if (state === reported && !focused) return;
     reported = state;
@@ -148,6 +162,8 @@ const AUTOFILL_SCRIPT = `(() => {
       username: !!current.username,
       password: current.passwords.length > 0,
       signup: current.signup,
+      usernameLabel,
+      passwordLabel,
       focused: !!focused,
     });
   };
@@ -213,6 +229,25 @@ const AUTOFILL_SCRIPT = `(() => {
       try { field.focus(); field.select?.(); } finally { filling = false; }
       return true;
     },
+    // Drawn in a closed shadow root over the field; it never touches the field itself.
+    highlight: (which) => {
+      const field = which === "username" ? current.username : current.passwords[0];
+      if (!field?.isConnected) return false;
+      field.scrollIntoView({ block: "center" });
+      const rect = field.getBoundingClientRect();
+      const host = document.createElement("div");
+      const ring = document.createElement("div");
+      ring.style.cssText = "position:fixed;pointer-events:none;z-index:2147483647;border-radius:6px;box-shadow:0 0 0 3px #3b82f6,0 0 0 8px rgba(59,130,246,.35)";
+      ring.style.left = rect.left - 3 + "px";
+      ring.style.top = rect.top - 3 + "px";
+      ring.style.width = rect.width + 6 + "px";
+      ring.style.height = rect.height + 6 + "px";
+      host.attachShadow({ mode: "closed" }).append(ring);
+      document.documentElement.append(host);
+      ring.animate([{ opacity: 1 }, { opacity: 0.3 }, { opacity: 1 }], { duration: 700, iterations: 3 });
+      setTimeout(() => host.remove(), 2400);
+      return true;
+    },
     answerPasskey: (id, allow) =>
       document.dispatchEvent(new CustomEvent(${JSON.stringify(PASSKEY_REPLY)}, {
         detail: JSON.stringify({ id, allow }),
@@ -247,6 +282,8 @@ export type CredentialPrompt =
       readonly username: boolean;
       readonly password: boolean;
       readonly signup: boolean;
+      readonly usernameLabel: string | null;
+      readonly passwordLabel: string | null;
       readonly dismissed: boolean;
     }
   | {
@@ -267,6 +304,8 @@ export type AutofillReport =
       readonly username: boolean;
       readonly password: boolean;
       readonly signup: boolean;
+      readonly usernameLabel: string | null;
+      readonly passwordLabel: string | null;
       readonly focused: boolean;
     }
   | { readonly type: "formGone"; readonly doc: string }
@@ -310,6 +349,8 @@ export const parseAutofillReport = (event: {
         username: message.username === true,
         password: message.password === true,
         signup: message.signup === true,
+        usernameLabel: str(message.usernameLabel, 80),
+        passwordLabel: str(message.passwordLabel, 80),
         focused: message.focused === true,
       };
     }
@@ -387,6 +428,19 @@ export const fillLogin = async (
   if (input.submit && last) await pressEnter(cdp);
   return last !== null;
 };
+
+export const highlightField = (
+  cdp: CDPSession,
+  contextId: number,
+  which: "username" | "password",
+) =>
+  callInWorld(
+    cdp,
+    contextId,
+    `globalThis.__t3Autofill?.highlight(${JSON.stringify(which)}) ?? false`,
+  )
+    .then((shown) => shown === true)
+    .catch(() => false);
 
 export const answerPasskey = (
   cdp: CDPSession,

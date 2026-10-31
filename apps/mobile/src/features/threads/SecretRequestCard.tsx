@@ -102,6 +102,8 @@ function PendingSecretRequestForm(props: {
       item.login ? { type: "login", username, password: secret } : { type: "save", secret },
     );
   const loginUrl = item.login ? loginRequestUrl(item.login.url) : null;
+  const pageLabel = (kind: "username" | "password") =>
+    item.login?.fields?.find((field) => field.kind === kind)?.label ?? null;
 
   return (
     <View className="mb-3 gap-3 rounded-[20px] border border-border bg-card-alt p-4">
@@ -123,7 +125,7 @@ function PendingSecretRequestForm(props: {
       {item.login ? (
         <TextInput
           accessibilityLabel="Username"
-          placeholder="Username or email (if the page asks)"
+          placeholder={pageLabel("username") ?? "Username or email (if the page asks)"}
           value={username}
           onChangeText={setUsername}
           editable={!submitting}
@@ -138,7 +140,9 @@ function PendingSecretRequestForm(props: {
       <TextInput
         accessibilityLabel={item.login ? "Password" : item.label}
         placeholder={
-          item.login ? "Password" : (item.placeholder ?? SECRET_REQUEST_DEFAULT_PLACEHOLDER)
+          item.login
+            ? (pageLabel("password") ?? "Password")
+            : (item.placeholder ?? SECRET_REQUEST_DEFAULT_PLACEHOLDER)
         }
         value={secret}
         onChangeText={setSecret}

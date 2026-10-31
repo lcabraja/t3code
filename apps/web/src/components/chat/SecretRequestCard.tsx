@@ -13,9 +13,17 @@ import {
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
 import type { EnvironmentId, OrchestrationV2ProjectedTurnItem } from "@t3tools/contracts";
-import { CheckIcon, GlobeIcon, LockIcon, MinusIcon, ShieldCheckIcon } from "lucide-react";
-import { useId, useRef, useState, type FormEvent } from "react";
+import {
+  CheckIcon,
+  GlobeIcon,
+  LocateFixedIcon,
+  LockIcon,
+  MinusIcon,
+  ShieldCheckIcon,
+} from "lucide-react";
+import { useId, useRef, useState, type FormEvent, type ReactNode } from "react";
 
+import { showLoginField } from "../../browser/loginFieldHighlight";
 import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { Button } from "../ui/button";
@@ -102,6 +110,14 @@ function PendingSecretRequestForm(props: {
     );
   };
   const loginUrl = item.login ? loginRequestUrl(item.login.url) : null;
+  const pageField = (kind: "username" | "password") =>
+    item.login?.fields?.find((field) => field.kind === kind);
+  const showField = (kind: "username" | "password") => {
+    const tabId = item.login?.tabId;
+    if (tabId === undefined || !pageField(kind)) return undefined;
+    return () =>
+      showLoginField({ environmentId: props.environmentId, threadId: item.threadId }, tabId, kind);
+  };
 
   return (
     <form
@@ -144,15 +160,26 @@ function PendingSecretRequestForm(props: {
         ) : null}
       </div>
       {item.login ? (
-        <Input
-          aria-label="Username"
-          placeholder="Username or email (if the page asks)"
-          autoComplete="username"
-          autoCapitalize="off"
-          spellCheck={false}
-          value={username}
-          disabled={submitting}
-          onChange={(event) => setUsername(event.currentTarget.value)}
+        <LoginFieldRow
+          description={pageField("username")?.label ?? "Username or email, if the page asks"}
+          onShow={showField("username")}
+        >
+          <Input
+            aria-label="Username"
+            placeholder={pageField("username")?.label ?? "Username or email"}
+            autoComplete="username"
+            autoCapitalize="off"
+            spellCheck={false}
+            value={username}
+            disabled={submitting}
+            onChange={(event) => setUsername(event.currentTarget.value)}
+          />
+        </LoginFieldRow>
+      ) : null}
+      {item.login ? (
+        <LoginFieldRow
+          description={pageField("password")?.label ?? "Password"}
+          onShow={showField("password")}
         />
       ) : null}
       <div className="flex min-w-0 items-center gap-2">
@@ -170,7 +197,9 @@ function PendingSecretRequestForm(props: {
               ? {}
               : { "data-1p-ignore": true, "data-lpignore": "true", "data-bwignore": true })}
             placeholder={
-              item.login ? "Password" : (item.placeholder ?? SECRET_REQUEST_DEFAULT_PLACEHOLDER)
+              item.login
+                ? (pageField("password")?.label ?? "Password")
+                : (item.placeholder ?? SECRET_REQUEST_DEFAULT_PLACEHOLDER)
             }
             value={secret}
             disabled={submitting}
@@ -210,5 +239,27 @@ function PendingSecretRequestForm(props: {
         </Button>
       </div>
     </form>
+  );
+}
+
+/** One login field: what the page calls it, and a way to find it on the page. */
+function LoginFieldRow(props: {
+  readonly description: string;
+  readonly onShow: (() => void) | undefined;
+  readonly children?: ReactNode;
+}) {
+  return (
+    <div className="flex min-w-0 flex-col gap-1">
+      <div className="flex min-w-0 items-center justify-between gap-2">
+        <span className="min-w-0 truncate text-xs text-muted-foreground">{props.description}</span>
+        {props.onShow ? (
+          <Button type="button" size="xs" variant="ghost-muted" onClick={props.onShow}>
+            <LocateFixedIcon aria-hidden />
+            Show on page
+          </Button>
+        ) : null}
+      </div>
+      {props.children}
+    </div>
   );
 }

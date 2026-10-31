@@ -36,6 +36,7 @@ import {
 import { AgentCursorMark } from "~/components/preview/AgentBrowserCursor";
 import { CommandBlock } from "~/components/CommandBlock";
 import { CredentialPromptCard } from "./CredentialPromptCard";
+import { useLoginFieldHighlight } from "./loginFieldHighlight";
 import { Button } from "~/components/ui/button";
 import { Input } from "~/components/ui/input";
 import { toastManager } from "~/components/ui/toast";
@@ -237,6 +238,19 @@ export function ServerBrowserSurface(props: {
   const send = (input: PreviewStreamInput) => {
     clientRef.current?.send(input);
   };
+
+  const pendingHighlight = useLoginFieldHighlight((state) => state.pending);
+  const connected = control !== null;
+  const sendHighlight = useEffectEvent((field: "username" | "password") =>
+    send({ type: "highlight", field }),
+  );
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- a highlight asked for from chat waits for this tab's stream to connect
+  useEffect(() => {
+    if (!connected || pendingHighlight?.threadId !== threadId || pendingHighlight.tabId !== tabId)
+      return;
+    sendHighlight(pendingHighlight.field);
+    useLoginFieldHighlight.setState({ pending: null });
+  }, [connected, pendingHighlight, tabId, threadId]);
 
   const clearInput = () => {
     if (inputFrameRef.current !== null) cancelAnimationFrame(inputFrameRef.current);

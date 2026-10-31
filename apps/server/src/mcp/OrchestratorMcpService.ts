@@ -2177,8 +2177,8 @@ const make = Effect.gen(function* () {
       if (Option.isNone(serverBrowser)) {
         return yield* failure("invalid_request", "This environment has no server browser.");
       }
-      const page = yield* serverBrowser.value.tabUrl({ threadId, tabId: input.tabId });
-      const url = Option.flatMap(page, (href) => {
+      const page = yield* serverBrowser.value.loginPage({ threadId, tabId: input.tabId });
+      const url = Option.flatMap(page, ({ url: href }) => {
         try {
           const parsed = new URL(href);
           return parsed.protocol === "http:" || parsed.protocol === "https:"
@@ -2194,24 +2194,33 @@ const make = Effect.gen(function* () {
           `Tab ${input.tabId} is not an open server browser tab on a web page in this thread. Call preview_open first.`,
         );
       }
-      const { status, turnItemId } = yield* askForSecret(scope, "request_login", {
-        label: `Sign in to ${url.value.host}`,
-        reason: input.reason,
-        login: { tabId: input.tabId, url: url.value.href },
-        timeoutMs: input.timeoutMs,
-        clientRequestId: input.clientRequestId,
-      });
-      if (status !== "saved") return { status };
-      const login = yield* secretRequests.takeLogin({ threadId, turnItemId });
-      if (Option.isNone(login)) {
-        return { status: "not_filled" as const, reason: "The login was no longer available." };
-      }
-      return yield* serverBrowser.value.submitLogin({
-        threadId,
-        tabId: input.tabId,
-        origin: url.value.origin,
-        ...login.value,
-      });
+      const browser = serverBrowser.value;
+      const origin = url.value.origin;
+      return yield* Effect.gen(function* () {
+        yield* browser.holdLoginPrompt({ threadId, tabId: input.tabId });
+        const { status, turnItemId } = yield* askForSecret(scope, "request_login", {
+          label: `Sign in to ${url.value.host}`,
+          reason: input.reason,
+          login: {
+            tabId: input.tabId,
+            url: url.value.href,
+            fields: Option.match(page, { onNone: () => [], onSome: ({ fields }) => fields }),
+          },
+          timeoutMs: input.timeoutMs,
+          clientRequestId: input.clientRequestId,
+        });
+        if (status !== "saved") return { status };
+        const login = yield* secretRequests.takeLogin({ threadId, turnItemId });
+        if (Option.isNone(login)) {
+          return { status: "not_filled" as const, reason: "The login was no longer available." };
+        }
+        return yield* browser.submitLogin({
+          threadId,
+          tabId: input.tabId,
+          origin,
+          ...login.value,
+        });
+      }).pipe(Effect.scoped);
     }),
 
     capabilities: Effect.fn("OrchestratorMcpService.capabilities")(function* (scope, input = {}) {

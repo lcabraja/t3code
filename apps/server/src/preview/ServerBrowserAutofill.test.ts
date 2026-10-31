@@ -18,6 +18,7 @@ describe("parseAutofillReport", () => {
           username: true,
           password: true,
           signup: false,
+          usernameLabel: "Email address",
           focused: true,
         }),
       ),
@@ -28,6 +29,8 @@ describe("parseAutofillReport", () => {
       username: true,
       password: true,
       signup: false,
+      usernameLabel: "Email address",
+      passwordLabel: null,
       focused: true,
     });
     expect(
